@@ -72,7 +72,8 @@ public:
     StructTyID,      ///< 13: Structures
     ArrayTyID,       ///< 14: Arrays
     PointerTyID,     ///< 15: Pointers
-    VectorTyID       ///< 16: SIMD 'packed' format, or other vector type
+    VectorTyID,       ///< 16: SIMD 'packed' format, or other vector type
+
   };
 
 private:

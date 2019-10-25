@@ -50,7 +50,31 @@ BasicBlock::BasicBlock(LLVMContext &C, const Twine &Name, Function *NewParent,
   setName(Name);
 }
 
+BasicBlock::BasicBlock(LLVMContext &C, const Twine &Name, MEFBody *NewParent,
+                       BasicBlock *InsertBefore)
+  : Value(Type::getLabelTy(C), Value::BasicBlockVal), Parent(nullptr) {
+
+  if (NewParent)
+    insertInto(NewParent, InsertBefore);
+  else
+    assert(!InsertBefore &&
+           "Cannot insert block before another block with no function!");
+
+  setName(Name);
+}
+
 void BasicBlock::insertInto(Function *NewParent, BasicBlock *InsertBefore) {
+  assert(NewParent && "Expected a parent");
+  assert(!Parent && "Already has a parent");
+  assert(NewParent->getBasicBlockList().empty() && "Empty list");
+
+  if (InsertBefore)
+    NewParent->getBasicBlockList().insert(InsertBefore->getIterator(), this);
+  else
+    NewParent->getBasicBlockList().push_back(this);
+}
+
+void BasicBlock::insertInto(MEFBody *NewParent, BasicBlock *InsertBefore) {
   assert(NewParent && "Expected a parent");
   assert(!Parent && "Already has a parent");
 

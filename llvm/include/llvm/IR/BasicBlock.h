@@ -25,6 +25,7 @@
 #include "llvm/Support/CBindingWrapping.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/Compiler.h"
+#include "MEFBody.h"
 #include <cassert>
 #include <cstddef>
 #include <iterator>
@@ -77,6 +78,10 @@ private:
                       Function *Parent = nullptr,
                       BasicBlock *InsertBefore = nullptr);
 
+  explicit BasicBlock(LLVMContext &C, const Twine &Name = "",
+                      MEFBody *Parent = nullptr,
+                      BasicBlock *InsertBefore = nullptr);
+
 public:
   BasicBlock(const BasicBlock &) = delete;
   BasicBlock &operator=(const BasicBlock &) = delete;
@@ -98,6 +103,12 @@ public:
   /// before the specified basic block.
   static BasicBlock *Create(LLVMContext &Context, const Twine &Name = "",
                             Function *Parent = nullptr,
+                            BasicBlock *InsertBefore = nullptr) {
+    return new BasicBlock(Context, Name, Parent, InsertBefore);
+  }
+
+  static BasicBlock *CreateMEF(LLVMContext &Context, const Twine &Name = "",
+                            MEFBody *Parent = nullptr,
                             BasicBlock *InsertBefore = nullptr) {
     return new BasicBlock(Context, Name, Parent, InsertBefore);
   }
@@ -215,6 +226,7 @@ public:
   ///
   /// \pre \a getParent() is \c nullptr.
   void insertInto(Function *Parent, BasicBlock *InsertBefore = nullptr);
+  void insertInto(MEFBody *Parent, BasicBlock *InsertBefore = nullptr);
 
   /// Return the predecessor of this block if it has a single predecessor
   /// block. Otherwise return a null pointer.

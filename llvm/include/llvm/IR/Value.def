@@ -64,6 +64,7 @@ HANDLE_GLOBAL_VALUE(GlobalAlias)
 HANDLE_GLOBAL_VALUE(GlobalIFunc)
 HANDLE_GLOBAL_VALUE(GlobalVariable)
 HANDLE_CONSTANT(BlockAddress)
+HANDLE_CONSTANT(MEFBody)
 HANDLE_CONSTANT(ConstantExpr)
 
 // ConstantAggregate.

@@ -23,6 +23,7 @@ add_llvm_library(LLVMCore
   DiagnosticPrinter.cpp
   Dominators.cpp
   Function.cpp
+  MEFBody.cpp
   GVMaterializer.cpp
   Globals.cpp
   IRBuilder.cpp

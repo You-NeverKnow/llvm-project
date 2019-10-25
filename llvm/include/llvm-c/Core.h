@@ -261,6 +261,7 @@ typedef enum {
   LLVMGlobalIFuncValueKind,
   LLVMGlobalVariableValueKind,
   LLVMBlockAddressValueKind,
+  LLVMMEFBodyValueKind,
   LLVMConstantExprValueKind,
   LLVMConstantArrayValueKind,
   LLVMConstantStructValueKind,
@@ -1519,6 +1520,7 @@ LLVMTypeRef LLVMX86MMXType(void);
   macro(User)                               \
     macro(Constant)                         \
       macro(BlockAddress)                   \
+      macro(MEFBody)                   \
       macro(ConstantAggregateZero)          \
       macro(ConstantArray)                  \
       macro(ConstantDataSequential)         \

@@ -72,8 +72,7 @@ private:
   BasicBlockListType BasicBlocks;         ///< The basic blocks
   mutable Argument *Arguments = nullptr;  ///< The formal arguments
   size_t NumArgs;
-  std::unique_ptr<ValueSymbolTable>
-      SymTab;                             ///< Symbol table of args/instructions
+  std::unique_ptr<ValueSymbolTable> SymTab;  ///< Symbol table of args/instructions
   AttributeList AttributeSets;            ///< Parameter attributes
 
   /*

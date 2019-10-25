@@ -33,7 +33,7 @@ add_library(LLVMExegesis
   SnippetGenerator.cpp
   Target.cpp
   Uops.cpp
-  )
+        ../../../include/llvm/IR/MEFBody.h)
 
 llvm_update_compile_flags(LLVMExegesis)
 llvm_map_components_to_libnames(libs

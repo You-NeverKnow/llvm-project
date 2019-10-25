@@ -4,7 +4,7 @@ add_library(LLVMCFIVerify
   FileAnalysis.h
   GraphBuilder.cpp
   GraphBuilder.h
-  )
+        ../../../include/llvm/IR/MEFBody.h)
 
 llvm_update_compile_flags(LLVMCFIVerify)
 llvm_map_components_to_libnames(libs

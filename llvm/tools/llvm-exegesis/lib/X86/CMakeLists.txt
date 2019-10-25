@@ -6,7 +6,7 @@ include_directories(
 add_library(LLVMExegesisX86
   STATIC
   Target.cpp
-  )
+        ../../../../include/llvm/IR/MEFBody.h)
 
 llvm_update_compile_flags(LLVMExegesisX86)
 llvm_map_components_to_libnames(libs

@@ -5,7 +5,7 @@ set(LLVM_LINK_COMPONENTS Support)
 
 add_library(DynamicLibraryLib STATIC
   ExportedFuncs.cpp
-  )
+        ../../../include/llvm/IR/MEFBody.h)
 set_target_properties(DynamicLibraryLib PROPERTIES FOLDER "Tests")
 
 # extract_symbols.py relies on all its library arguments being in the same
