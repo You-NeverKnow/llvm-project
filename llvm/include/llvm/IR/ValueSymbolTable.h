@@ -23,6 +23,7 @@ namespace llvm {
 class Argument;
 class BasicBlock;
 class Function;
+class MEFEntry;
 class MEFBody;
 class GlobalAlias;
 class GlobalIFunc;
@@ -39,6 +40,7 @@ class ValueSymbolTable {
   friend class SymbolTableListTraits<Argument>;
   friend class SymbolTableListTraits<BasicBlock>;
   friend class SymbolTableListTraits<Function>;
+  friend class SymbolTableListTraits<MEFEntry>;
   friend class SymbolTableListTraits<MEFBody>;
   friend class SymbolTableListTraits<GlobalAlias>;
   friend class SymbolTableListTraits<GlobalIFunc>;

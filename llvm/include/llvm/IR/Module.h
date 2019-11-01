@@ -24,6 +24,7 @@
 #include "llvm/IR/Comdat.h"
 #include "llvm/IR/DataLayout.h"
 #include "llvm/IR/Function.h"
+#include "llvm/IR/MEFEntry.h"
 #include "llvm/IR/MEFBody.h"
 #include "llvm/IR/GlobalAlias.h"
 #include "llvm/IR/GlobalIFunc.h"
@@ -72,6 +73,7 @@ public:
   /// The type for the list of functions.
   using FunctionListType = SymbolTableList<Function>;
   using MEFBodyListType = SymbolTableList<MEFBody>;
+  using MEFEntryListType = SymbolTableList<MEFEntry>;
   /// The type for the list of aliases.
   using AliasListType = SymbolTableList<GlobalAlias>;
   /// The type for the list of ifuncs.
@@ -173,6 +175,7 @@ private:
   GlobalListType GlobalList;      ///< The Global Variables in the module
   FunctionListType FunctionList;  ///< The Functions in the module
   MEFBodyListType MEFBodyList;  ///< The MEF bodies in the module
+  MEFEntryListType MEFEntryList;  ///< The MEF bodies in the module
   AliasListType AliasList;        ///< The Aliases in the module
   IFuncListType IFuncList;        ///< The IFuncs in the module
   NamedMDListType NamedMDList;    ///< The named metadata in the module
@@ -546,6 +549,14 @@ public:
   MEFBodyListType       &getMEFBodyList()           { return MEFBodyList; }
   static MEFBodyListType Module::*getSublistAccess(MEFBody*) {
     return &Module::MEFBodyList;
+  }
+
+  /// Get the Module's list of MEF bodies (constant).
+  const MEFEntryListType &getMEFEntryList() const     { return MEFEntryList; }
+  /// Get the Module's list of MEF bodies.
+  MEFEntryListType       &getMEFEntryList()           { return MEFEntryList; }
+  static MEFEntryListType Module::*getSublistAccess(MEFEntry*) {
+    return &Module::MEFEntryList;
   }
 
   /// Get the Module's list of aliases (constant).

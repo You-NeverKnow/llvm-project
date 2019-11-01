@@ -369,8 +369,16 @@ Constant *Constant::getAggregateElement(Constant *Elt) const {
 }
 
 void Constant::destroyConstant() {
-  /// First call destroyConstantImpl on the subclass.  This gives the subclass
-  /// a chance to remove the constant from any maps/pools it's contained in.
+//  if (getValueID()== ValueTy::FunctionVal) {
+////      assert(!is_simple_type<Function>::value && "Not a simple val");
+////      cast<Function>(this)->;
+//  }
+//  if (getValueID()== ValueTy::MEFEntryVal) {
+////      assert(!is_simple_type<MEFEntry>::value && "Not a simple val");
+//      cast<MEFEntry>(this)->getValueID();
+//  }
+/// First call destroyConstantImpl on the subclass.  This gives the subclass
+/// a chance to remove the constant from any maps/pools it's contained in.
   switch (getValueID()) {
   default:
     llvm_unreachable("Not a constant!");

@@ -3,12 +3,40 @@
 #include "llvm/IR/Module.h"
 
 using namespace llvm;
-MEFBody::MEFBody(const Twine &N, Module *M)
-    :Constant((Type *) Type::VoidTyID, Constant::MEFBodyVal, nullptr, 0) {
+MEFBody::MEFBody(LLVMContext& C, const Twine &N, Module *M)
+    :Constant(Type::getVoidTy(C), Constant::MEFBodyVal, nullptr, 0) {
     if (M) {
         M->getMEFBodyList().push_back(this);
         setParent(M);
     }
+}
+
+LLVMContext &MEFBody::getContext() const {
+    return getType()->getContext();
+}
+
+void MEFBody::dropAllReferences() {
+    for (BasicBlock &BB : *this)
+        BB.dropAllReferences();
+
+    // Delete all basic blocks. They are now unused, except possibly by
+    // blockaddresses, but BasicBlock's destructor takes care of those.
+    // :TODO NEED to change this once getParent() has been updated to return MEFBody
+    // Either that, or add another path for block deletion
+//    while (!BasicBlocks.empty())
+//        BasicBlocks.begin()->eraseFromParent();
+
+    // Drop uses of any optional data (real or placeholder).
+//    if (getNumOperands()) {
+//        User::dropAllReferences();
+//        setNumHungOffUseOperands(0);
+//        setValueSubclassData(getSubclassDataFromValue() & ~0xe);
+//    }
+
+}
+MEFBody::~MEFBody() {
+    // After this it is safe to delete instructions.
+    dropAllReferences();
 
 }
 
@@ -17,7 +45,6 @@ MEFBody::MEFBody(const Twine &N, Module *M)
 void MEFBody::destroyConstantImpl() {
     llvm_unreachable("You can't GV->destroyConstantImpl()!");
 }
-
 
 Value *MEFBody::handleOperandChangeImpl(Value *From, Value *To) {
     llvm_unreachable("Unsupported class for handleOperandChange()!");

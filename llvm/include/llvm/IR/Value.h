@@ -33,6 +33,7 @@ class ConstantAggregate;
 class DataLayout;
 class Function;
 class MEFBody;
+class MEFEntry;
 class GlobalAlias;
 class GlobalIFunc;
 class GlobalIndirectSymbol;
@@ -845,6 +846,12 @@ template <> struct isa_impl<Function, Value> {
   }
 };
 
+template <> struct isa_impl<MEFEntry, Value> {
+  static inline bool doit(const Value &Val) {
+    return Val.getValueID() == Value::MEFEntryVal;
+  }
+};
+
 template <> struct isa_impl<MEFBody, Value> {
   static inline bool doit(const Value &Val) {
     return Val.getValueID() == Value::MEFBodyVal;
@@ -883,7 +890,7 @@ template <> struct isa_impl<GlobalValue, Value> {
 
 template <> struct isa_impl<GlobalObject, Value> {
   static inline bool doit(const Value &Val) {
-    return isa<GlobalVariable>(Val) || isa<Function>(Val);
+    return isa<GlobalVariable>(Val) || isa<Function>(Val) || isa<MEFEntry>(Val);
   }
 };
 

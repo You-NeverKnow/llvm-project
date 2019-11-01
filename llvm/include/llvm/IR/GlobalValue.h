@@ -578,6 +578,7 @@ public:
   // Methods for support type inquiry through isa, cast, and dyn_cast:
   static bool classof(const Value *V) {
     return V->getValueID() == Value::FunctionVal ||
+           V->getValueID() == Value::MEFEntryVal ||
            V->getValueID() == Value::GlobalVariableVal ||
            V->getValueID() == Value::GlobalAliasVal ||
            V->getValueID() == Value::GlobalIFuncVal;

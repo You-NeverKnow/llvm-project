@@ -24,6 +24,7 @@ add_llvm_library(LLVMCore
   Dominators.cpp
   Function.cpp
   MEFBody.cpp
+  MEFEntry.cpp
   GVMaterializer.cpp
   Globals.cpp
   IRBuilder.cpp

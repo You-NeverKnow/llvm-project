@@ -257,6 +257,7 @@ typedef enum {
   LLVMMemoryPhiValueKind,
 
   LLVMFunctionValueKind,
+  LLVMMEFEntryValueKind,
   LLVMGlobalAliasValueKind,
   LLVMGlobalIFuncValueKind,
   LLVMGlobalVariableValueKind,
@@ -1538,6 +1539,7 @@ LLVMTypeRef LLVMX86MMXType(void);
         macro(GlobalIFunc)                  \
         macro(GlobalObject)                 \
           macro(Function)                   \
+          macro(MEFEntry)                   \
           macro(GlobalVariable)             \
       macro(UndefValue)                     \
     macro(Instruction)                      \

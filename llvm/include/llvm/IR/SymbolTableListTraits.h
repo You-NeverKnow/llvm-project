@@ -34,6 +34,7 @@ class Argument;
 class BasicBlock;
 class Function;
 class MEFBody;
+class MEFEntry;
 class GlobalAlias;
 class GlobalIFunc;
 class GlobalVariable;
@@ -54,6 +55,7 @@ DEFINE_SYMBOL_TABLE_PARENT_TYPE(BasicBlock, Function)
 DEFINE_SYMBOL_TABLE_PARENT_TYPE(Argument, Function)
 DEFINE_SYMBOL_TABLE_PARENT_TYPE(Function, Module)
 DEFINE_SYMBOL_TABLE_PARENT_TYPE(MEFBody, Module)
+DEFINE_SYMBOL_TABLE_PARENT_TYPE(MEFEntry, Module)
 DEFINE_SYMBOL_TABLE_PARENT_TYPE(GlobalVariable, Module)
 DEFINE_SYMBOL_TABLE_PARENT_TYPE(GlobalAlias, Module)
 DEFINE_SYMBOL_TABLE_PARENT_TYPE(GlobalIFunc, Module)

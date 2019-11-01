@@ -16,7 +16,7 @@ foreach(item ${BENCHMARK_MAIN})
   list(REMOVE_ITEM SOURCE_FILES "${item}")
 endforeach()
 
-add_library(benchmark ${SOURCE_FILES} ../../../include/llvm/IR/MEFBody.h ../../../lib/IR/MEFBody.cpp)
+add_library(benchmark ${SOURCE_FILES} ../../../include/llvm/IR/MEFBody.h ../../../lib/IR/MEFBody.cpp ../../../include/llvm/IR/MEFEntry.h)
 set_target_properties(benchmark PROPERTIES
   OUTPUT_NAME "benchmark"
   VERSION ${GENERIC_LIB_VERSION}

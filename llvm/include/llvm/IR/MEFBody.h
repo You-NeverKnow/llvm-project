@@ -20,14 +20,8 @@
 
 namespace llvm {
 
-class AssemblyAnnotationWriter;
 class Constant;
-class DISubprogram;
 class LLVMContext;
-class Module;
-template <typename T> class Optional;
-class raw_ostream;
-class Type;
 
 class MEFBody: public Constant, public ilist_node<MEFBody> {
 public:
@@ -37,10 +31,10 @@ public:
     using const_iterator = BasicBlockListType::const_iterator;
 
 
-    MEFBody(const Twine &N = "", Module *M = nullptr);
+    MEFBody(LLVMContext& C, const Twine &N = "", Module *M = nullptr);
     MEFBody(MEFBody& x) = delete;
     MEFBody operator=(MEFBody& other) = delete;
-    ~MEFBody() = default;
+    ~MEFBody();
 private:
     BasicBlockListType BasicBlocks;         ///< The basic blocks
 
@@ -54,8 +48,8 @@ protected:
     }
 
 public:
-    static MEFBody *Create(const Twine &N = "", Module *M = nullptr) {
-        return new MEFBody(N, M);
+    static MEFBody *Create(LLVMContext& C, const Twine &N = "", Module *M = nullptr) {
+        return new MEFBody(C, N, M);
     }
     /// Get the underlying elements of the Function... the basic block list is
     /// empty for external functions.
@@ -90,6 +84,17 @@ public:
     /// MEFBody's because they shouldn't be treated like other constants.
     void destroyConstantImpl();
     Value *handleOperandChangeImpl(Value *From, Value *To);
+
+    //===--------------------------------------------------------------------===//
+    // Methods that participate in this object's destruction
+    //
+    bool hasGC() const {
+        return false;
+    }
+    void clearGC();
+    void dropAllReferences();
+    LLVMContext& getContext() const;
+
 };
 }
 #endif //LLVM_MEFBODY_H
