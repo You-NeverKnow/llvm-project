@@ -68,6 +68,7 @@ void BasicBlock::insertInto(Function *NewParent, BasicBlock *InsertBefore) {
   assert(!Parent && "Already has a parent");
   assert(NewParent->getBasicBlockList().empty() && "Empty list");
 
+  M = NewParent->getParent();
   if (InsertBefore)
     NewParent->getBasicBlockList().insert(InsertBefore->getIterator(), this);
   else
@@ -78,6 +79,7 @@ void BasicBlock::insertInto(MEFBody *NewParent, BasicBlock *InsertBefore) {
   assert(NewParent && "Expected a parent");
   assert(!Parent && "Already has a parent");
 
+  M = NewParent->getParent();
   if (InsertBefore)
     NewParent->getBasicBlockList().insert(InsertBefore->getIterator(), this);
   else
@@ -155,7 +157,8 @@ void BasicBlock::moveAfter(BasicBlock *MovePos) {
 }
 
 const Module *BasicBlock::getModule() const {
-  return getParent()->getParent();
+    return M;
+//  return getParent()->getParent();
 }
 
 const Instruction *BasicBlock::getTerminator() const {

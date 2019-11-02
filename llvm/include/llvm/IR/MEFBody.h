@@ -51,6 +51,11 @@ public:
     static MEFBody *Create(LLVMContext& C, const Twine &N = "", Module *M = nullptr) {
         return new MEFBody(C, N, M);
     }
+
+    /// Get the module that this global value is contained inside of...
+    Module *getParent() { return Parent; }
+    const Module *getParent() const { return Parent; }
+
     /// Get the underlying elements of the Function... the basic block list is
     /// empty for external functions.
     ///

@@ -68,7 +68,7 @@ private:
   Function *Parent;
 
   void setParent(Function *parent);
-
+  const Module *M;
   /// Constructor.
   ///
   /// If the function parameter is specified, the basic block is automatically

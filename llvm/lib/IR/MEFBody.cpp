@@ -4,7 +4,7 @@
 
 using namespace llvm;
 MEFBody::MEFBody(LLVMContext& C, const Twine &N, Module *M)
-    :Constant(Type::getVoidTy(C), Constant::MEFBodyVal, nullptr, 0) {
+    :Constant(Type::getLabelTy(C), Constant::MEFBodyVal, nullptr, 0) {
     if (M) {
         M->getMEFBodyList().push_back(this);
         setParent(M);

@@ -1567,7 +1567,7 @@ public:
 
   AllocaInst *CreateAlloca(Type *Ty, Value *ArraySize = nullptr,
                            const Twine &Name = "") {
-    const DataLayout &DL = BB->getParent()->getParent()->getDataLayout();
+    const DataLayout &DL = BB->getModule()->getDataLayout();
     return Insert(new AllocaInst(Ty, DL.getAllocaAddrSpace(), ArraySize), Name);
   }
 
@@ -2369,7 +2369,7 @@ public:
     auto *Int8PtrTy = getInt8PtrTy(PtrType->getPointerAddressSpace());
     if (PtrType != Int8PtrTy)
       Ptr = CreateBitCast(Ptr, Int8PtrTy);
-    Module *M = BB->getParent()->getParent();
+    Module *M = BB->getModule();
     Function *FnLaunderInvariantGroup = Intrinsic::getDeclaration(
         M, Intrinsic::launder_invariant_group, {Int8PtrTy});
 
@@ -2397,7 +2397,7 @@ public:
     auto *Int8PtrTy = getInt8PtrTy(PtrType->getPointerAddressSpace());
     if (PtrType != Int8PtrTy)
       Ptr = CreateBitCast(Ptr, Int8PtrTy);
-    Module *M = BB->getParent()->getParent();
+    Module *M = BB->getModule();
     Function *FnStripInvariantGroup = Intrinsic::getDeclaration(
         M, Intrinsic::strip_invariant_group, {Int8PtrTy});
 
@@ -2469,7 +2469,7 @@ public:
     Type *ResultType =
         GetElementPtrInst::getGEPReturnType(Base, IdxList);
 
-    Module *M = BB->getParent()->getParent();
+    Module *M = BB->getModule();
     Function *FnPreserveArrayAccessIndex = Intrinsic::getDeclaration(
         M, Intrinsic::preserve_array_access_index, {ResultType, BaseType});
 
@@ -2486,7 +2486,7 @@ public:
            "Invalid Base ptr type for preserve.union.access.index.");
     auto *BaseType = Base->getType();
 
-    Module *M = BB->getParent()->getParent();
+    Module *M = BB->getModule();
     Function *FnPreserveUnionAccessIndex = Intrinsic::getDeclaration(
         M, Intrinsic::preserve_union_access_index, {BaseType, BaseType});
 
@@ -2509,7 +2509,7 @@ public:
     Type *ResultType =
         GetElementPtrInst::getGEPReturnType(Base, {Zero, GEPIndex});
 
-    Module *M = BB->getParent()->getParent();
+    Module *M = BB->getModule();
     Function *FnPreserveStructAccessIndex = Intrinsic::getDeclaration(
         M, Intrinsic::preserve_struct_access_index, {ResultType, BaseType});
 
