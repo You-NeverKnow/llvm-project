@@ -483,6 +483,13 @@ unsigned Module::getInstructionCount() {
   return NumInstrs;
 }
 
+unsigned Module::getInstructionCountMEF() {
+  unsigned NumInstrs = 0;
+  for (MEFBody &B : MEFBodyList)
+    NumInstrs += B.getInstructionCount();
+  return NumInstrs;
+}
+
 Comdat *Module::getOrInsertComdat(StringRef Name) {
   auto &Entry = *ComdatSymTab.insert(std::make_pair(Name, Comdat())).first;
   Entry.second.Name = &Entry;

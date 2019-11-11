@@ -37,6 +37,7 @@ class AnalysisResolver;
 class AnalysisUsage;
 class BasicBlock;
 class Function;
+class MEFBody;
 class ImmutablePass;
 class Module;
 class PassInfo;
@@ -235,6 +236,7 @@ public:
   /// runOnModule - Virtual method overriden by subclasses to process the module
   /// being operated on.
   virtual bool runOnModule(Module &M) = 0;
+  virtual bool runOnModuleMEF(Module &M) {return false;};
 
   void assignPassManager(PMStack &PMS, PassManagerType T) override;
 
@@ -292,6 +294,7 @@ public:
   /// runOnFunction - Virtual method overriden by subclasses to do the
   /// per-function processing of the pass.
   virtual bool runOnFunction(Function &F) = 0;
+  virtual bool runOnFunctionMEF(MEFBody &B) {return false;};
 
   void assignPassManager(PMStack &PMS, PassManagerType T) override;
 

@@ -48,6 +48,7 @@
 #include <cassert>
 #include <cstdint>
 #include <iterator>
+#include <iostream>
 
 using namespace llvm;
 
@@ -66,6 +67,7 @@ namespace {
     }
 
     bool runOnFunction(Function &F) override;
+    bool runOnFunctionMEF(MEFBody &B) override;
 
   private:
     bool bracketInstWithFences(Instruction *I, AtomicOrdering Order);
@@ -340,6 +342,159 @@ bool AtomicExpand::runOnFunction(Function &F) {
       MadeChange |= tryExpandAtomicCmpXchg(CASI);
     }
   }
+  return MadeChange;
+}
+
+bool AtomicExpand::runOnFunctionMEF(MEFBody &B) {
+  auto *TPC = getAnalysisIfAvailable<TargetPassConfig>();
+  if (!TPC)
+    return false;
+
+  auto &TM = TPC->getTM<TargetMachine>();
+  if (!TM.getSubtargetImpl(B)->enableAtomicExpand())
+    return false;
+  TLI = TM.getSubtargetImpl(B)->getTargetLowering();
+
+  SmallVector<Instruction *, 1> AtomicInsts;
+
+  // Changing control-flow while iterating through it is a bad idea, so gather a
+  // list of all atomic instructions before we start.
+  for (inst_iterator_mef II = inst_begin(B), E = inst_end(B); II != E; ++II) {
+    Instruction *I = &*II;
+    if (I->isAtomic() && !isa<FenceInst>(I))
+      AtomicInsts.push_back(I);
+  }
+
+  bool MadeChange = false;
+  for (auto I : AtomicInsts) {
+    auto LI = dyn_cast<LoadInst>(I);
+    auto SI = dyn_cast<StoreInst>(I);
+    auto RMWI = dyn_cast<AtomicRMWInst>(I);
+    auto CASI = dyn_cast<AtomicCmpXchgInst>(I);
+    assert((LI || SI || RMWI || CASI) && "Unknown atomic instruction");
+
+    // If the Size/Alignment is not supported, replace with a libcall.
+    if (LI) {
+      if (!atomicSizeSupported(TLI, LI)) {
+        expandAtomicLoadToLibcall(LI);
+        MadeChange = true;
+        continue;
+      }
+    } else if (SI) {
+      if (!atomicSizeSupported(TLI, SI)) {
+        expandAtomicStoreToLibcall(SI);
+        MadeChange = true;
+        continue;
+      }
+    } else if (RMWI) {
+      if (!atomicSizeSupported(TLI, RMWI)) {
+        expandAtomicRMWToLibcall(RMWI);
+        MadeChange = true;
+        continue;
+      }
+    } else if (CASI) {
+      if (!atomicSizeSupported(TLI, CASI)) {
+        expandAtomicCASToLibcall(CASI);
+        MadeChange = true;
+        continue;
+      }
+    }
+
+    if (TLI->shouldInsertFencesForAtomic(I)) {
+      auto FenceOrdering = AtomicOrdering::Monotonic;
+      if (LI && isAcquireOrStronger(LI->getOrdering())) {
+        FenceOrdering = LI->getOrdering();
+        LI->setOrdering(AtomicOrdering::Monotonic);
+      } else if (SI && isReleaseOrStronger(SI->getOrdering())) {
+        FenceOrdering = SI->getOrdering();
+        SI->setOrdering(AtomicOrdering::Monotonic);
+      } else if (RMWI && (isReleaseOrStronger(RMWI->getOrdering()) ||
+                          isAcquireOrStronger(RMWI->getOrdering()))) {
+        FenceOrdering = RMWI->getOrdering();
+        RMWI->setOrdering(AtomicOrdering::Monotonic);
+      } else if (CASI &&
+                 TLI->shouldExpandAtomicCmpXchgInIR(CASI) ==
+                     TargetLoweringBase::AtomicExpansionKind::None &&
+                 (isReleaseOrStronger(CASI->getSuccessOrdering()) ||
+                  isAcquireOrStronger(CASI->getSuccessOrdering()))) {
+        // If a compare and swap is lowered to LL/SC, we can do smarter fence
+        // insertion, with a stronger one on the success path than on the
+        // failure path. As a result, fence insertion is directly done by
+        // expandAtomicCmpXchg in that case.
+        FenceOrdering = CASI->getSuccessOrdering();
+        CASI->setSuccessOrdering(AtomicOrdering::Monotonic);
+        CASI->setFailureOrdering(AtomicOrdering::Monotonic);
+      }
+
+      if (FenceOrdering != AtomicOrdering::Monotonic) {
+        MadeChange |= bracketInstWithFences(I, FenceOrdering);
+      }
+    }
+
+    if (LI) {
+      if (LI->getType()->isFloatingPointTy()) {
+        // TODO: add a TLI hook to control this so that each target can
+        // convert to lowering the original type one at a time.
+        LI = convertAtomicLoadToIntegerType(LI);
+        assert(LI->getType()->isIntegerTy() && "invariant broken");
+        MadeChange = true;
+      }
+
+      MadeChange |= tryExpandAtomicLoad(LI);
+    } else if (SI) {
+      if (SI->getValueOperand()->getType()->isFloatingPointTy()) {
+        // TODO: add a TLI hook to control this so that each target can
+        // convert to lowering the original type one at a time.
+        SI = convertAtomicStoreToIntegerType(SI);
+        assert(SI->getValueOperand()->getType()->isIntegerTy() &&
+               "invariant broken");
+        MadeChange = true;
+      }
+
+      if (TLI->shouldExpandAtomicStoreInIR(SI))
+        MadeChange |= expandAtomicStore(SI);
+    } else if (RMWI) {
+      // There are two different ways of expanding RMW instructions:
+      // - into a load if it is idempotent
+      // - into a Cmpxchg/LL-SC loop otherwise
+      // we try them in that order.
+
+      if (isIdempotentRMW(RMWI) && simplifyIdempotentRMW(RMWI)) {
+        MadeChange = true;
+      } else {
+        unsigned MinCASSize = TLI->getMinCmpXchgSizeInBits() / 8;
+        unsigned ValueSize = getAtomicOpSize(RMWI);
+        AtomicRMWInst::BinOp Op = RMWI->getOperation();
+        if (ValueSize < MinCASSize &&
+            (Op == AtomicRMWInst::Or || Op == AtomicRMWInst::Xor ||
+             Op == AtomicRMWInst::And)) {
+          RMWI = widenPartwordAtomicRMW(RMWI);
+          MadeChange = true;
+        }
+
+        MadeChange |= tryExpandAtomicRMW(RMWI);
+      }
+    } else if (CASI) {
+      // TODO: when we're ready to make the change at the IR level, we can
+      // extend convertCmpXchgToInteger for floating point too.
+      assert(!CASI->getCompareOperand()->getType()->isFloatingPointTy() &&
+             "unimplemented - floating point not legal at IR level");
+      if (CASI->getCompareOperand()->getType()->isPointerTy() ) {
+        // TODO: add a TLI hook to control this so that each target can
+        // convert to lowering the original type one at a time.
+        CASI = convertCmpXchgToIntegerType(CASI);
+        assert(CASI->getCompareOperand()->getType()->isIntegerTy() &&
+               "invariant broken");
+        MadeChange = true;
+      }
+
+      MadeChange |= tryExpandAtomicCmpXchg(CASI);
+    }
+  }
+
+  // debug
+  std::cout << "AtomicExpandPass for MEF successful" << '\n';
+
   return MadeChange;
 }
 

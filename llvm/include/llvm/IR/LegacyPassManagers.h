@@ -408,6 +408,9 @@ public:
   unsigned initSizeRemarkInfo(
       Module &M,
       StringMap<std::pair<unsigned, unsigned>> &FunctionToInstrCount);
+  unsigned initSizeRemarkInfoMEF(
+      Module &M,
+      StringMap<std::pair<unsigned, unsigned>> &FunctionToInstrCount);
 
   /// Emit a remark signifying that the number of IR instructions in the module
   /// changed.
@@ -472,7 +475,9 @@ public:
   /// run - Execute all of the passes scheduled for execution.  Keep track of
   /// whether any of the passes modifies the module, and if so, return true.
   bool runOnFunction(Function &F);
+  bool runOnFunctionMEF(MEFBody &B);
   bool runOnModule(Module &M) override;
+  bool runOnModuleMEF(Module &M) override;
 
   /// cleanup - After running all passes, clean up pass manager cache.
   void cleanup();

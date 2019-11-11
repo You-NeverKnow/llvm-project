@@ -32,6 +32,8 @@
 #include "llvm/Support/raw_ostream.h"
 #include <algorithm>
 #include <unordered_set>
+#include <iostream>
+
 using namespace llvm;
 using namespace llvm::legacy;
 
@@ -156,6 +158,28 @@ unsigned PMDataManager::initSizeRemarkInfo(
     // here, we'll be able to let the user know that F no longer contributes to
     // the module.
     FunctionToInstrCount[F.getName().str()] =
+        std::pair<unsigned, unsigned>(FCount, 0);
+    InstrCount += FCount;
+  }
+  return InstrCount;
+}
+
+unsigned PMDataManager::initSizeRemarkInfoMEF(
+    Module &M, StringMap<std::pair<unsigned, unsigned>> &FunctionToInstrCount) {
+  // Only calculate getInstructionCount if the size-info remark is requested.
+  unsigned InstrCount = 0;
+
+  // Collect instruction counts for every function. We'll use this to emit
+  // per-function size remarks later.
+  for (MEFBody &B : M.getMEFBodyList()) {
+    unsigned FCount = B.getInstructionCount();
+
+    // Insert a record into FunctionToInstrCount keeping track of the current
+    // size of the function as the first member of a pair. Set the second
+    // member to 0; if the function is deleted by the pass, then when we get
+    // here, we'll be able to let the user know that F no longer contributes to
+    // the module.
+    FunctionToInstrCount[B.getName().str()] =
         std::pair<unsigned, unsigned>(FCount, 0);
     InstrCount += FCount;
   }
@@ -472,6 +496,7 @@ public:
   /// run - Execute all of the passes scheduled for execution.  Keep track of
   /// whether any of the passes modifies the module, and if so, return true.
   bool runOnModule(Module &M);
+  bool runOnModuleMEF(Module &M);
 
   using llvm::Pass::doInitialization;
   using llvm::Pass::doFinalization;
@@ -560,6 +585,7 @@ public:
   /// run - Execute all of the passes scheduled for execution.  Keep track of
   /// whether any of the passes modifies the module, and if so, return true.
   bool run(Module &M);
+  bool runMEF(Module &M);
 
   using llvm::Pass::doInitialization;
   using llvm::Pass::doFinalization;
@@ -1620,7 +1646,12 @@ bool FPPassManager::runOnFunction(Function &F) {
   // Collect inherited analysis from Module level pass manager.
   populateInheritedAnalysis(TPM->activeStack);
 
-  unsigned InstrCount, FunctionSize = 0;
+    // Debug -- iterable
+    std::cout << "PassVector FP = =================================";
+    for(auto& var: PassVector) std::cout << (std::string) var->getPassName() << ", "; std::cout << '\n';
+    std::cout << "PassVector = =================================";std::cout << '\n';
+
+    unsigned InstrCount, FunctionSize = 0;
   StringMap<std::pair<unsigned, unsigned>> FunctionToInstrCount;
   bool EmitICRemark = M.shouldEmitInstrCountChangedRemark();
   // Collect the initial size of the module.
@@ -1677,12 +1708,84 @@ bool FPPassManager::runOnFunction(Function &F) {
   return Changed;
 }
 
+bool FPPassManager::runOnFunctionMEF(MEFBody &B) {
+    bool Changed = false;
+    Module &M = *B.getParent();
+
+    // Collect inherited analysis from Module level pass manager.
+    populateInheritedAnalysis(TPM->activeStack);
+
+//    unsigned InstrCount, MEFBodySize = 0;
+//    StringMap<std::pair<unsigned, unsigned>> MEFBodyToInstrCount;
+//    bool EmitICRemark = M.shouldEmitInstrCountChangedRemark();
+//    // Collect the initial size of the module.
+//    if (EmitICRemark) {
+//        InstrCount = initSizeRemarkInfo(M, MEFBodyToInstrCount);
+//        MEFBodySize = B.getInstructionCount();
+//    }
+
+    llvm::TimeTraceScope FunctionScope ("OptMEFBody", B.getName());
+    for (unsigned Index = 0; Index < getNumContainedPasses(); ++Index) {
+        FunctionPass *FP = getContainedPass(Index);
+        bool LocalChanged = false;
+
+        llvm::TimeTraceScope PassScope("RunPass", FP->getPassName());
+
+        dumpPassInfo(FP, EXECUTION_MSG, ON_FUNCTION_MSG, B.getName());
+        dumpRequiredSet(FP);
+
+        initializeAnalysisImpl(FP);
+
+        {
+            PassManagerPrettyStackEntry X(FP, B);
+            TimeRegion PassTimer(getPassTimer(FP));
+            LocalChanged |= FP->runOnFunctionMEF(B);
+//            if (EmitICRemark) {
+//                unsigned NewSize = F.getInstructionCount();
+//
+//                // Update the size of the function, emit a remark, and update the size
+//                // of the module.
+//                if (NewSize != MEFBodySize) {
+//                    int64_t Delta = static_cast<int64_t>(NewSize) -
+//                                    static_cast<int64_t>(MEFBodySize);
+//                    emitInstrCountChangedRemark(FP, M, Delta, InstrCount,
+//                                                MEFBodyToInstrCount, &F);
+//                    InstrCount = static_cast<int64_t>(InstrCount) + Delta;
+//                    MEFBodySize = NewSize;
+//                }
+//            }
+        }
+
+        Changed |= LocalChanged;
+        if (LocalChanged)
+            dumpPassInfo(FP, MODIFICATION_MSG, ON_FUNCTION_MSG, B.getName());
+        dumpPreservedSet(FP);
+        dumpUsedSet(FP);
+
+        verifyPreservedAnalysis(FP);
+        removeNotPreservedAnalysis(FP);
+        recordAvailableAnalysis(FP);
+        removeDeadPasses(FP, B.getName(), ON_FUNCTION_MSG);
+    }
+
+    return Changed;
+}
+
 bool FPPassManager::runOnModule(Module &M) {
   bool Changed = false;
 
   llvm::TimeTraceScope TimeScope("OptModule", M.getName());
   for (Function &F : M)
     Changed |= runOnFunction(F);
+
+  return Changed;
+}
+
+bool FPPassManager::runOnModuleMEF(Module &M) {
+  bool Changed = false;
+  llvm::TimeTraceScope TimeScope("OptModule", M.getName());
+  for (MEFBody &B : M.getMEFBodyList())
+    Changed |= runOnFunctionMEF(B);
 
   return Changed;
 }
@@ -1716,6 +1819,10 @@ MPPassManager::runOnModule(Module &M) {
   llvm::TimeTraceScope TimeScope("OptModule", M.getName());
 
   bool Changed = false;
+    // Debug -- iterable
+    std::cout << "PassVector = =================================";
+    for(auto& var: PassVector) std::cout << (std::string) var->getPassName() << ", "; std::cout << '\n';
+    std::cout << "PassVector = =================================";std::cout << '\n';
 
   // Initialize on-the-fly passes
   for (auto &OnTheFlyManager : OnTheFlyManagers) {
@@ -1751,6 +1858,89 @@ MPPassManager::runOnModule(Module &M) {
       if (EmitICRemark) {
         // Update the size of the module.
         unsigned ModuleCount = M.getInstructionCount();
+        if (ModuleCount != InstrCount) {
+          int64_t Delta = static_cast<int64_t>(ModuleCount) -
+                          static_cast<int64_t>(InstrCount);
+          emitInstrCountChangedRemark(MP, M, Delta, InstrCount,
+                                      FunctionToInstrCount);
+          InstrCount = ModuleCount;
+        }
+      }
+    }
+
+    Changed |= LocalChanged;
+    if (LocalChanged)
+      dumpPassInfo(MP, MODIFICATION_MSG, ON_MODULE_MSG,
+                   M.getModuleIdentifier());
+    dumpPreservedSet(MP);
+    dumpUsedSet(MP);
+
+    verifyPreservedAnalysis(MP);
+    removeNotPreservedAnalysis(MP);
+    recordAvailableAnalysis(MP);
+    removeDeadPasses(MP, M.getModuleIdentifier(), ON_MODULE_MSG);
+  }
+
+  // Finalize module passes
+  for (int Index = getNumContainedPasses() - 1; Index >= 0; --Index)
+    Changed |= getContainedPass(Index)->doFinalization(M);
+
+  // Finalize on-the-fly passes
+  for (auto &OnTheFlyManager : OnTheFlyManagers) {
+    FunctionPassManagerImpl *FPP = OnTheFlyManager.second;
+    // We don't know when is the last time an on-the-fly pass is run,
+    // so we need to releaseMemory / finalize here
+    FPP->releaseMemoryOnTheFly();
+    Changed |= FPP->doFinalization(M);
+  }
+
+  return Changed;
+}
+
+bool
+MPPassManager::runOnModuleMEF(Module &M) {
+  llvm::TimeTraceScope TimeScope("OptModule", M.getName());
+
+  bool Changed = false;
+    // Debug -- iterable
+    std::cout << "PassVector = =================================";
+    for(auto& var: PassVector) std::cout << (std::string) var->getPassName() << ", "; std::cout << '\n';
+    std::cout << "PassVector = =================================";std::cout << '\n';
+
+  // Initialize on-the-fly passes
+  for (auto &OnTheFlyManager : OnTheFlyManagers) {
+    FunctionPassManagerImpl *FPP = OnTheFlyManager.second;
+    Changed |= FPP->doInitialization(M);
+  }
+
+  // Initialize module passes
+  for (unsigned Index = 0; Index < getNumContainedPasses(); ++Index)
+    Changed |= getContainedPass(Index)->doInitialization(M);
+
+  unsigned InstrCount;
+  StringMap<std::pair<unsigned, unsigned>> FunctionToInstrCount;
+  bool EmitICRemark = M.shouldEmitInstrCountChangedRemark();
+  // Collect the initial size of the module.
+  if (EmitICRemark)
+    InstrCount = initSizeRemarkInfoMEF(M, FunctionToInstrCount);
+
+  for (unsigned Index = 0; Index < getNumContainedPasses(); ++Index) {
+    ModulePass *MP = getContainedPass(Index);
+    bool LocalChanged = false;
+
+    dumpPassInfo(MP, EXECUTION_MSG, ON_MODULE_MSG, M.getModuleIdentifier());
+    dumpRequiredSet(MP);
+
+    initializeAnalysisImpl(MP);
+
+    {
+      PassManagerPrettyStackEntry X(MP, M);
+      TimeRegion PassTimer(getPassTimer(MP));
+
+      LocalChanged |= MP->runOnModuleMEF(M);
+      if (EmitICRemark) {
+        // Update the size of the module.
+        unsigned ModuleCount = M.getInstructionCountMEF();
         if (ModuleCount != InstrCount) {
           int64_t Delta = static_cast<int64_t>(ModuleCount) -
                           static_cast<int64_t>(InstrCount);
@@ -1851,7 +2041,27 @@ Pass* MPPassManager::getOnTheFlyPass(Pass *MP, AnalysisID PI, Function &F){
 /// whether any of the passes modifies the module, and if so, return true.
 bool PassManagerImpl::run(Module &M) {
   bool Changed = false;
+  dumpArguments();
+  dumpPasses();
 
+
+  for (ImmutablePass *ImPass : getImmutablePasses())
+    Changed |= ImPass->doInitialization(M);
+
+  initializeAllAnalysisInfo();
+  for (unsigned Index = 0; Index < getNumContainedManagers(); ++Index) {
+    Changed |= getContainedManager(Index)->runOnModule(M);
+    M.getContext().yield();
+  }
+
+  for (ImmutablePass *ImPass : getImmutablePasses())
+    Changed |= ImPass->doFinalization(M);
+
+  return Changed;
+}
+
+bool PassManagerImpl::runMEF(Module &M) {
+  bool Changed = false;
   dumpArguments();
   dumpPasses();
 
@@ -1860,7 +2070,7 @@ bool PassManagerImpl::run(Module &M) {
 
   initializeAllAnalysisInfo();
   for (unsigned Index = 0; Index < getNumContainedManagers(); ++Index) {
-    Changed |= getContainedManager(Index)->runOnModule(M);
+    Changed |= getContainedManager(Index)->runOnModuleMEF(M);
     M.getContext().yield();
   }
 
@@ -1892,6 +2102,10 @@ void PassManager::add(Pass *P) {
 /// whether any of the passes modifies the module, and if so, return true.
 bool PassManager::run(Module &M) {
   return PM->run(M);
+}
+
+bool PassManager::runMEF(Module &M) {
+  return PM->runMEF(M);
 }
 
 //===----------------------------------------------------------------------===//

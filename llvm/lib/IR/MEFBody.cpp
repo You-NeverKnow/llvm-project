@@ -11,6 +11,14 @@ MEFBody::MEFBody(LLVMContext& C, const Twine &N, Module *M)
     }
 }
 
+unsigned MEFBody::getInstructionCount() const {
+    unsigned NumInstrs = 0;
+    for (const BasicBlock &BB : BasicBlocks)
+        NumInstrs += std::distance(BB.instructionsWithoutDebug().begin(),
+                                   BB.instructionsWithoutDebug().end());
+    return NumInstrs;
+}
+
 LLVMContext &MEFBody::getContext() const {
     return getType()->getContext();
 }

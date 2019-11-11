@@ -73,6 +73,7 @@ private:
                           const std::string &Banner) const override;
 
   bool runOnFunction(Function &F) override;
+//  bool runOnFunctionMEF(MEFBody &B) override;
 };
 
 } // End llvm namespace

@@ -219,6 +219,7 @@ public:
   /// This is equivalent to the sum of the IR instruction counts of each
   /// function contained in the module.
   unsigned getInstructionCount();
+  unsigned getInstructionCountMEF();
 
   /// Get the module's original source file name. When compiling from
   /// bitcode, this is taken from a bitcode record where it was recorded.

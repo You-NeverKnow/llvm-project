@@ -319,6 +319,85 @@ X86TargetMachine::getSubtargetImpl(const Function &F) const {
   return I.get();
 }
 
+const X86Subtarget *
+X86TargetMachine::getSubtargetImpl(const MEFBody &B) const {
+//  Attribute CPUAttr = B.getFnAttribute("target-cpu");
+//  Attribute FSAttr = B.getFnAttribute("target-features");
+
+//  StringRef CPU = !CPUAttr.hasAttribute(Attribute::None)
+//                      ? CPUAttr.getValueAsString()
+//                      : (StringRef)TargetCPU;
+//  StringRef FS = !FSAttr.hasAttribute(Attribute::None)
+//                     ? FSAttr.getValueAsString()
+//                     : (StringRef)TargetFS;
+  StringRef CPU = (StringRef) TargetCPU;
+  StringRef FS = (StringRef) TargetFS;
+
+  SmallString<512> Key;
+  Key.reserve(CPU.size() + FS.size());
+  Key += CPU;
+  Key += FS;
+
+  // FIXME: This is related to the code below to reset the target options,
+  // we need to know whether or not the soft float flag is set on the
+  // function before we can generate a subtarget. We also need to use
+  // it as a key for the subtarget since that can be the only difference
+  // between two functions.
+//  bool SoftFloat =
+//      F.getFnAttribute("use-soft-float").getValueAsString() == "true";
+//  // If the soft float attribute is set on the function turn on the soft float
+//  // subtarget feature.
+//  if (SoftFloat)
+//    Key += FS.empty() ? "+soft-float" : ",+soft-float";
+
+  // Keep track of the key width after all features are added so we can extract
+  // the feature string out later.
+  unsigned CPUFSWidth = Key.size();
+
+  // Extract prefer-vector-width attribute.
+  unsigned PreferVectorWidthOverride = 0;
+//  if (F.hasFnAttribute("prefer-vector-width")) {
+//    StringRef Val = F.getFnAttribute("prefer-vector-width").getValueAsString();
+//    unsigned Width;
+//    if (!Val.getAsInteger(0, Width)) {
+//      Key += ",prefer-vector-width=";
+//      Key += Val;
+//      PreferVectorWidthOverride = Width;
+//    }
+//  }
+
+  // Extract min-legal-vector-width attribute.
+  unsigned RequiredVectorWidth = UINT32_MAX;
+//  if (F.hasFnAttribute("min-legal-vector-width")) {
+//    StringRef Val =
+//        F.getFnAttribute("min-legal-vector-width").getValueAsString();
+//    unsigned Width;
+//    if (!Val.getAsInteger(0, Width)) {
+//      Key += ",min-legal-vector-width=";
+//      Key += Val;
+//      RequiredVectorWidth = Width;
+//    }
+//  }
+
+  // Extracted here so that we make sure there is backing for the StringRef. If
+  // we assigned earlier, its possible the SmallString reallocated leaving a
+  // dangling StringRef.
+  FS = Key.slice(CPU.size(), CPUFSWidth);
+
+  auto &I = SubtargetMap[Key];
+  if (!I) {
+    // This needs to be done before we create a new subtarget since any
+    // creation will depend on the TM and the code generation flags on the
+    // function that reside in TargetOptions.
+//    resetTargetOptions(F);
+    I = llvm::make_unique<X86Subtarget>(TargetTriple, CPU, FS, *this,
+                                        Options.StackAlignmentOverride,
+                                        PreferVectorWidthOverride,
+                                        RequiredVectorWidth);
+  }
+  return I.get();
+}
+
 //===----------------------------------------------------------------------===//
 // Command line options for x86
 //===----------------------------------------------------------------------===//

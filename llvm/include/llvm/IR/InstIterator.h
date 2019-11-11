@@ -157,6 +157,45 @@ inline const_inst_range instructions(const Function &F) {
   return const_inst_range(inst_begin(F), inst_end(F));
 }
 
+using inst_iterator_mef =
+    InstIterator<SymbolTableList<BasicBlock>, MEFBody::iterator,
+                 BasicBlock::iterator, Instruction>;
+using const_inst_iterator_mef =
+    InstIterator<const SymbolTableList<BasicBlock>,
+                 MEFBody::const_iterator, BasicBlock::const_iterator,
+                 const Instruction>;
+using inst_range_mef = iterator_range<inst_iterator_mef>;
+using const_inst_range_mef = iterator_range<const_inst_iterator_mef>;
+
+inline inst_iterator_mef inst_begin(MEFBody *F) { return inst_iterator_mef(*F); }
+inline inst_iterator_mef inst_end(MEFBody *F)   { return inst_iterator_mef(*F, true); }
+inline inst_range_mef instructions(MEFBody *F) {
+  return inst_range_mef(inst_begin(F), inst_end(F));
+}
+inline const_inst_iterator_mef inst_begin(const MEFBody *F) {
+  return const_inst_iterator_mef(*F);
+}
+inline const_inst_iterator_mef inst_end(const MEFBody *F) {
+  return const_inst_iterator_mef(*F, true);
+}
+inline const_inst_range_mef instructions(const MEFBody *F) {
+  return const_inst_range_mef(inst_begin(F), inst_end(F));
+}
+inline inst_iterator_mef inst_begin(MEFBody &F) { return inst_iterator_mef(F); }
+inline inst_iterator_mef inst_end(MEFBody &F)   { return inst_iterator_mef(F, true); }
+inline inst_range_mef instructions(MEFBody &F) {
+  return inst_range_mef(inst_begin(F), inst_end(F));
+}
+inline const_inst_iterator_mef inst_begin(const MEFBody &F) {
+  return const_inst_iterator_mef(F);
+}
+inline const_inst_iterator_mef inst_end(const MEFBody &F) {
+  return const_inst_iterator_mef(F, true);
+}
+inline const_inst_range_mef instructions(const MEFBody &F) {
+  return const_inst_range_mef(inst_begin(F), inst_end(F));
+}
+
 } // end namespace llvm
 
 #endif // LLVM_IR_INSTITERATOR_H

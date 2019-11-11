@@ -56,6 +56,11 @@ public:
     Module *getParent() { return Parent; }
     const Module *getParent() const { return Parent; }
 
+    /// Returns the number of non-debug IR instructions in this function.
+    /// This is equivalent to the sum of the sizes of each basic block contained
+    /// within this function.
+    unsigned getInstructionCount() const;
+
     /// Get the underlying elements of the Function... the basic block list is
     /// empty for external functions.
     ///

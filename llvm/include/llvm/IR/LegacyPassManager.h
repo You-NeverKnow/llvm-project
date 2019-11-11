@@ -56,7 +56,7 @@ public:
   /// run - Execute all of the passes scheduled for execution.  Keep track of
   /// whether any of the passes modifies the module, and if so, return true.
   bool run(Module &M);
-
+  bool runMEF(Module &M);
 private:
   /// PassManagerImpl_New is the actual class. PassManager is just the
   /// wraper to publish simple pass manager interface

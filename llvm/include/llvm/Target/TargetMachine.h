@@ -24,6 +24,7 @@
 namespace llvm {
 
 class Function;
+class MEFBody;
 class GlobalValue;
 class MachineModuleInfo;
 class Mangler;
@@ -115,6 +116,10 @@ public:
   /// Virtual method implemented by subclasses that returns a reference to that
   /// target's TargetSubtargetInfo-derived member variable.
   virtual const TargetSubtargetInfo *getSubtargetImpl(const Function &) const {
+    return nullptr;
+  }
+
+  virtual const TargetSubtargetInfo *getSubtargetImpl(const MEFBody &) const {
     return nullptr;
   }
   virtual TargetLoweringObjectFile *getObjFileLowering() const {

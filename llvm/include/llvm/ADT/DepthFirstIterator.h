@@ -111,6 +111,14 @@ private:
       VisitStack.push_back(StackElement(Node, None));
   }
 
+  inline df_iterator(std::vector<NodeRef> &Nodes, SetType &S)
+      : df_iterator_storage<SetType, ExtStorage>(S) {
+    for (const auto& Node: Nodes) {
+      if (this->Visited.insert(Node).second)
+        VisitStack.push_back(StackElement(Node, None));
+    }
+  }
+
   inline df_iterator(SetType &S)
     : df_iterator_storage<SetType, ExtStorage>(S) {
     // End is when stack is empty

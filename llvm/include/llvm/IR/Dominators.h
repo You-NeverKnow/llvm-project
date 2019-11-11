@@ -270,6 +270,7 @@ public:
   const DominatorTree &getDomTree() const { return DT; }
 
   bool runOnFunction(Function &F) override;
+  bool runOnFunctionMEF(MEFBody &B) override;
 
   void verifyAnalysis() const override;
 
