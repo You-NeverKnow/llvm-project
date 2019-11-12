@@ -26,6 +26,7 @@
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/Compiler.h"
 #include "MEFBody.h"
+#include "Instructions.h"
 #include <cassert>
 #include <cstddef>
 #include <iterator>
@@ -66,6 +67,7 @@ private:
 
   InstListType InstList;
   Function *Parent;
+  MEFBody *ParentMEF;
 
   void setParent(Function *parent);
   const Module *M;
@@ -116,6 +118,8 @@ public:
   /// Return the enclosing method, or null if none.
   const Function *getParent() const { return Parent; }
         Function *getParent()       { return Parent; }
+  const MEFBody *getParentMEF() const { return ParentMEF; }
+        MEFBody *getParentMEF()       { return ParentMEF; }
 
   /// Return the module owning the function this basic block belongs to, or
   /// nullptr if the function does not have a module.
@@ -130,10 +134,6 @@ public:
   /// Returns the terminator instruction if the block is well formed or null
   /// if the block is not well formed.
   const Instruction *getTerminator() const LLVM_READONLY;
-  Instruction *getTerminator() {
-    return const_cast<Instruction *>(
-        static_cast<const BasicBlock *>(this)->getTerminator());
-  }
 
   /// Returns the call instruction calling \@llvm.experimental.deoptimize
   /// prior to the terminating return instruction of this basic block, if such

@@ -731,11 +731,6 @@ public:
     DomTreeBuilder::Calculate(*this);
   }
 
-  /// recalculate - compute a dominator tree for the given function
-  void recalculate(MEFBody &Func) {
-    DomTreeBuilder::Calculate(*this);
-  }
-
   void recalculate(ParentType &Func, ArrayRef<UpdateType> Updates) {
     Parent = &Func;
     DomTreeBuilder::CalculateWithUpdates(*this, Updates);

@@ -80,6 +80,7 @@ void BasicBlock::insertInto(MEFBody *NewParent, BasicBlock *InsertBefore) {
   assert(!Parent && "Already has a parent");
 
   M = NewParent->getParent();
+  ParentMEF = NewParent;
   if (InsertBefore)
     NewParent->getBasicBlockList().insert(InsertBefore->getIterator(), this);
   else

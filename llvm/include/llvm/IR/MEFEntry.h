@@ -56,7 +56,10 @@ public:
         return V->getValueID() == Value::MEFEntryVal;
     }
 
-    void Register(BasicBlock *block) {entryBlock = block;}
+    void Register(BasicBlock *block) {
+        entryBlock = block;
+        entryBlock->getParentMEF()->registerEntry(entryBlock);
+    }
 
     const BasicBlock       &getEntryBlock() const   { return *entryBlock; }
     BasicBlock             &getEntryBlock()         { return *entryBlock; }

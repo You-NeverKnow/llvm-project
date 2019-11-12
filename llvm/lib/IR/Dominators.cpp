@@ -365,11 +365,6 @@ bool DominatorTreeWrapperPass::runOnFunction(Function &F) {
   return false;
 }
 
-bool DominatorTreeWrapperPass::runOnFunctionMEF(MEFBody &B) {
-  DT.recalculate(B);
-  return false;
-}
-
 void DominatorTreeWrapperPass::verifyAnalysis() const {
   if (VerifyDomInfo)
     assert(DT.verify(DominatorTree::VerificationLevel::Full));

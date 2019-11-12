@@ -37,7 +37,7 @@ public:
     ~MEFBody();
 private:
     BasicBlockListType BasicBlocks;         ///< The basic blocks
-
+    BasicBlock* pseudoEntryBlock;
     friend class SymbolTableListTraits<MEFBody>;
 protected:
     Module *Parent;             // The containing module.
@@ -60,6 +60,11 @@ public:
     /// This is equivalent to the sum of the sizes of each basic block contained
     /// within this function.
     unsigned getInstructionCount() const;
+    void makePseudoEntryBlock();
+    void registerEntry(BasicBlock* entry);
+
+    const BasicBlock*       &getPseudoEntryBlock() const   { return pseudoEntryBlock; }
+          BasicBlock*       &getPseudoEntryBlock()         { return pseudoEntryBlock }
 
     /// Get the underlying elements of the Function... the basic block list is
     /// empty for external functions.

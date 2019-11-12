@@ -345,6 +345,13 @@ template <> struct GraphTraits<Inverse<const BasicBlock*>> {
 // graph of basic blocks... these are the same as the basic block iterators,
 // except that the root node is implicitly the first node of the function.
 //
+template <> struct GraphTraits<MEFBody*> : public GraphTraits<BasicBlock*> {
+    static NodeRef getEntryNode(MEFBody *B) { return B->getPseudoEntryBlock(); }
+};
+template <> struct GraphTraits<const MEFBody*> : public GraphTraits<const BasicBlock*> {
+    static NodeRef getEntryNode(const MEFBody *B) { return B->getPseudoEntryBlock(); }
+};
+
 template <> struct GraphTraits<Function*> : public GraphTraits<BasicBlock*> {
   static NodeRef getEntryNode(Function *F) { return &F->getEntryBlock(); }
 
