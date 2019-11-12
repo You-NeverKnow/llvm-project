@@ -22,12 +22,13 @@ unsigned MEFBody::getInstructionCount() const {
 }
 
 void MEFBody::RegisterEntry(llvm::BasicBlock *entry) {
+    auto value = ConstantInt::get(Type::getInt32Ty(entry->getContext()), 0);
     if (PseudoEntryBlock->getTerminator()) {
         auto *sw = (SwitchInst*) PseudoEntryBlock->getTerminator();
-        sw->addCase(nullptr, entry);
+        sw->addCase(value, entry);
     } else {
         auto builder = IRBuilder<>(PseudoEntryBlock);
-        builder.CreateSwitch(nullptr, entry);
+        builder.CreateSwitch(value, entry);
     }
 }
 

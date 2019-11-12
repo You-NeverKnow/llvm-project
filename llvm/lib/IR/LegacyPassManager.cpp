@@ -1677,6 +1677,8 @@ bool FPPassManager::runOnFunction(Function &F) {
       PassManagerPrettyStackEntry X(FP, F);
       TimeRegion PassTimer(getPassTimer(FP));
       LocalChanged |= FP->runOnFunction(F);
+        // debug
+        std::cout << Index << ". " << (std::string) FP->getPassName() << ": " << LocalChanged << '\n';
       if (EmitICRemark) {
         unsigned NewSize = F.getInstructionCount();
 

@@ -46,6 +46,7 @@
 #include <string>
 #include <utility>
 #include <vector>
+#include <iostream>
 
 using namespace llvm;
 
@@ -150,6 +151,10 @@ bool llvm::EliminateUnreachableBlocks(MEFBody &F, DomTreeUpdater *DTU,
       BasicBlock *BB = &*I;
       DeadBlocks.push_back(BB);
     }
+
+  // Debug -- iterable
+  std::cout << "DeadBlocks = ";
+  for(auto& var: DeadBlocks) std::cout << "1." << (std::string) var->getName() << " "; std::cout << '\n';
 
   // Delete the dead blocks.
   DeleteDeadBlocks(DeadBlocks, DTU, KeepOneInputPHIs);
