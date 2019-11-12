@@ -1,5 +1,6 @@
 
 #include <llvm/IR/MEFBody.h>
+#include <llvm/IR/IRBuilder.h>
 #include "llvm/IR/Module.h"
 
 using namespace llvm;
@@ -9,6 +10,7 @@ MEFBody::MEFBody(LLVMContext& C, const Twine &N, Module *M)
         M->getMEFBodyList().push_back(this);
         setParent(M);
     }
+    PseudoEntryBlock = BasicBlock::CreateMEF(C);
 }
 
 unsigned MEFBody::getInstructionCount() const {
@@ -17,6 +19,16 @@ unsigned MEFBody::getInstructionCount() const {
         NumInstrs += std::distance(BB.instructionsWithoutDebug().begin(),
                                    BB.instructionsWithoutDebug().end());
     return NumInstrs;
+}
+
+void MEFBody::RegisterEntry(llvm::BasicBlock *entry) {
+    if (PseudoEntryBlock->getTerminator()) {
+        auto *sw = (SwitchInst*) PseudoEntryBlock->getTerminator();
+        sw->addCase(nullptr, entry);
+    } else {
+        auto builder = IRBuilder<>(PseudoEntryBlock);
+        builder.CreateSwitch(nullptr, entry);
+    }
 }
 
 LLVMContext &MEFBody::getContext() const {

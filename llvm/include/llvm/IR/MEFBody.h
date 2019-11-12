@@ -37,7 +37,7 @@ public:
     ~MEFBody();
 private:
     BasicBlockListType BasicBlocks;         ///< The basic blocks
-
+    BasicBlock *PseudoEntryBlock;
     friend class SymbolTableListTraits<MEFBody>;
 protected:
     Module *Parent;             // The containing module.
@@ -55,6 +55,10 @@ public:
     /// Get the module that this global value is contained inside of...
     Module *getParent() { return Parent; }
     const Module *getParent() const { return Parent; }
+
+    const BasicBlock       &getPseudoEntryBlock() const   { return *PseudoEntryBlock; }
+    BasicBlock             &getPseudoEntryBlock()         { return *PseudoEntryBlock; }
+    void RegisterEntry(BasicBlock *entry);
 
     /// Returns the number of non-debug IR instructions in this function.
     /// This is equivalent to the sum of the sizes of each basic block contained

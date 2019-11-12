@@ -66,6 +66,7 @@ private:
 
   InstListType InstList;
   Function *Parent;
+  MEFBody *ParentMEF;
 
   void setParent(Function *parent);
   const Module *M;
@@ -116,6 +117,9 @@ public:
   /// Return the enclosing method, or null if none.
   const Function *getParent() const { return Parent; }
         Function *getParent()       { return Parent; }
+
+  const MEFBody *getParentMEF() const { return ParentMEF; }
+        MEFBody *getParentMEF()       { return ParentMEF; }
 
   /// Return the module owning the function this basic block belongs to, or
   /// nullptr if the function does not have a module.

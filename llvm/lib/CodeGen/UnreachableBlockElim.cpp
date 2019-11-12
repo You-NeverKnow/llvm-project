@@ -46,6 +46,10 @@ class UnreachableBlockElimLegacyPass : public FunctionPass {
     return llvm::EliminateUnreachableBlocks(F);
   }
 
+  bool runOnFunctionMEF(MEFBody &B) override {
+    return llvm::EliminateUnreachableBlocks(B);
+  }
+
 public:
   static char ID; // Pass identification, replacement for typeid
   UnreachableBlockElimLegacyPass() : FunctionPass(ID) {

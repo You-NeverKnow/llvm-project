@@ -67,6 +67,8 @@ void DeleteDeadBlocks(ArrayRef <BasicBlock *> BBs,
 /// blocks being deleted will be preserved.
 bool EliminateUnreachableBlocks(Function &F, DomTreeUpdater *DTU = nullptr,
                                 bool KeepOneInputPHIs = false);
+bool EliminateUnreachableBlocks(MEFBody &B, DomTreeUpdater *DTU = nullptr,
+                                bool KeepOneInputPHIs = false);
 
 /// We know that BB has one predecessor. If there are any single-entry PHI nodes
 /// in it, fold them away. This handles the case when all entries to the PHI
