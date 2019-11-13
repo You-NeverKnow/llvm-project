@@ -26,6 +26,7 @@
 #include "llvm/CodeGen/Passes.h"
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/Function.h"
+#include "llvm/IR/MEFBody.h"
 
 using namespace llvm;
 using namespace ore;
@@ -99,29 +100,30 @@ bool MachineFunctionPass::runOnFunction(Function &F) {
   MFProps.reset(ClearedProperties);
   return RV;
 }
-//bool MachineFunctionPass::runOnFunction(Function &F) {
-//  // Do not codegen any 'available_externally' functions at all, they have
-//  // definitions outside the translation unit.
-//  if (F.hasAvailableExternallyLinkage())
+bool MachineFunctionPass::runOnFunctionMEF(MEFBody &B) {
+  // Do not codegen any 'available_externally' functions at all, they have
+  // definitions outside the translation unit.
+  // TODO:: change after MEFEntry has other linkages
+//  if (B.hasAvailableExternallyLinkage())
 //    return false;
-//
-//  MachineModuleInfo &MMI = getAnalysis<MachineModuleInfo>();
-//  MachineFunction &MF = MMI.getOrCreateMachineFunction(F);
-//
-//  MachineFunctionProperties &MFProps = MF.getProperties();
-//
-//#ifndef NDEBUG
-//  if (!MFProps.verifyRequiredProperties(RequiredProperties)) {
-//    errs() << "MachineFunctionProperties required by " << getPassName()
-//           << " pass are not met by function " << F.getName() << ".\n"
-//           << "Required properties: ";
-//    RequiredProperties.print(errs());
-//    errs() << "\nCurrent properties: ";
-//    MFProps.print(errs());
-//    errs() << "\n";
-//    llvm_unreachable("MachineFunctionProperties check failed");
-//  }
-//#endif
+
+  MachineModuleInfo &MMI = getAnalysis<MachineModuleInfo>();
+  MachineFunction &MF = MMI.getOrCreateMachineFunction(B);
+
+  MachineFunctionProperties &MFProps = MF.getProperties();
+
+#ifndef NDEBUG
+  if (!MFProps.verifyRequiredProperties(RequiredProperties)) {
+    errs() << "MachineFunctionProperties required by " << getPassName()
+           << " pass are not met by function " << B.getName() << ".\n"
+           << "Required properties: ";
+    RequiredProperties.print(errs());
+    errs() << "\nCurrent properties: ";
+    MFProps.print(errs());
+    errs() << "\n";
+    llvm_unreachable("MachineFunctionProperties check failed");
+  }
+#endif
 //  // Collect the MI count of the function before the pass.
 //  unsigned CountBefore, CountAfter;
 //
@@ -133,9 +135,9 @@ bool MachineFunctionPass::runOnFunction(Function &F) {
 //  // MachineFunction before the pass runs.
 //  if (ShouldEmitSizeRemarks)
 //    CountBefore = MF.getInstructionCount();
-//
-//  bool RV = runOnMachineFunction(MF);
-//
+
+  bool RV = runOnMachineFunction(MF);
+
 //  if (ShouldEmitSizeRemarks) {
 //    // We wanted size remarks. Check if there was a change to the number of
 //    // MachineInstrs in the module. Emit a remark if there was a change.
@@ -158,11 +160,11 @@ bool MachineFunctionPass::runOnFunction(Function &F) {
 //      });
 //    }
 //  }
-//
-//  MFProps.set(SetProperties);
-//  MFProps.reset(ClearedProperties);
-//  return RV;
-//}
+
+  MFProps.set(SetProperties);
+  MFProps.reset(ClearedProperties);
+  return RV;
+}
 
 void MachineFunctionPass::getAnalysisUsage(AnalysisUsage &AU) const {
   AU.addRequired<MachineModuleInfo>();

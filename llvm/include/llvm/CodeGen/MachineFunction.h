@@ -220,7 +220,8 @@ struct LandingPadInfo {
 };
 
 class MachineFunction {
-  const Function &F;
+  const Function *F;
+  const MEFBody *B;
   const LLVMTargetMachine &Target;
   const TargetSubtargetInfo *STI;
   MCContext &Ctx;
@@ -353,6 +354,7 @@ class MachineFunction {
   /// In particular, the XXXInfo data structure.
   /// \pre Fn, Target, MMI, and FunctionNumber are properly set.
   void init();
+  void initMEF();
 
 public:
   struct VariableDbgInfo {
@@ -412,6 +414,9 @@ public:
   MachineFunction(const Function &F, const LLVMTargetMachine &Target,
                   const TargetSubtargetInfo &STI, unsigned FunctionNum,
                   MachineModuleInfo &MMI);
+  MachineFunction(const MEFBody &B, const LLVMTargetMachine &Target,
+                  const TargetSubtargetInfo &STI, unsigned FunctionNum,
+                  MachineModuleInfo &MMI);
   MachineFunction(const MachineFunction &) = delete;
   MachineFunction &operator=(const MachineFunction &) = delete;
   ~MachineFunction();
@@ -420,6 +425,10 @@ public:
   void reset() {
     clear();
     init();
+  }
+  void resetMEF() {
+    clear();
+    initMEF();
   }
 
   /// Reset the currently registered delegate - otherwise assert.
@@ -448,7 +457,8 @@ public:
   const DataLayout &getDataLayout() const;
 
   /// Return the LLVM function that this machine code represents
-  const Function &getFunction() const { return F; }
+  const Function &getFunction() const { return *F; }
+  const MEFBody *getFunctionMEF() const { return B; }
 
   /// getName - Return the name of the corresponding LLVM function.
   StringRef getName() const;
@@ -528,8 +538,8 @@ public:
 
   /// setCallsSetJmp - Set a flag that indicates if there's a call to
   /// a "returns twice" function.
-  void setExposesReturnsTwice(bool B) {
-    ExposesReturnsTwice = B;
+  void setExposesReturnsTwice(bool b) {
+    ExposesReturnsTwice = b;
   }
 
   /// Returns true if the function contains any inline assembly.
@@ -538,8 +548,8 @@ public:
   }
 
   /// Set a flag that indicates that the function contains inline assembly.
-  void setHasInlineAsm(bool B) {
-    HasInlineAsm = B;
+  void setHasInlineAsm(bool b) {
+    HasInlineAsm = b;
   }
 
   bool hasWinCFI() const {
@@ -1012,7 +1022,12 @@ template <> struct GraphTraits<MachineFunction*> :
 };
 template <> struct GraphTraits<const MachineFunction*> :
   public GraphTraits<const MachineBasicBlock*> {
-  static NodeRef getEntryNode(const MachineFunction *F) { return &F->front(); }
+  static NodeRef getEntryNode(const MachineFunction *F) {
+      if (F->getFunctionMEF()) {
+          const_cast<MachineFunction*>(F)->CreateMachineBasicBlock(&(F->getFunctionMEF()->getPseudoEntryBlock()));
+      }
+      return &F->front();
+  }
 
   // nodes_iterator/begin/end - Allow iteration over all nodes in the graph
   using nodes_iterator = pointer_iterator<MachineFunction::const_iterator>;

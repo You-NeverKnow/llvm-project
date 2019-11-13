@@ -289,6 +289,32 @@ MachineModuleInfo::getOrCreateMachineFunction(const Function &F) {
   return *MF;
 }
 
+MachineFunction &
+MachineModuleInfo::getOrCreateMachineFunction(const MEFBody &B) {
+  // Shortcut for the common case where a sequence of MachineFunctionPasses
+  // all query for the same Function.
+  if (LastRequestMEF == &B)
+    return *LastResult;
+
+  auto I = MachineFunctionsMEF.insert(
+      std::make_pair(&B, std::unique_ptr<MachineFunction>()));
+  MachineFunction *MF;
+  if (I.second) {
+    // No pre-existing machine function, create a new one.
+    const TargetSubtargetInfo &STI = *TM.getSubtargetImpl(B);
+    const Function F {};
+    MF = new MachineFunction(B, TM, STI, NextFnNum++, *this);
+    // Update the set entry.
+    I.first->second.reset(MF);
+  } else {
+    MF = I.first->second.get();
+  }
+
+  LastRequestMEF = &B;
+  LastResult = MF;
+  return *MF;
+}
+
 void MachineModuleInfo::deleteMachineFunctionFor(Function &F) {
   MachineFunctions.erase(&F);
   LastRequest = nullptr;

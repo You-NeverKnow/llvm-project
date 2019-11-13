@@ -135,9 +135,11 @@ class MachineModuleInfo : public ImmutablePass {
 
   /// Maps IR Functions to their corresponding MachineFunctions.
   DenseMap<const Function*, std::unique_ptr<MachineFunction>> MachineFunctions;
+  DenseMap<const MEFBody*, std::unique_ptr<MachineFunction>> MachineFunctionsMEF;
   /// Next unique number available for a MachineFunction.
   unsigned NextFnNum = 0;
   const Function *LastRequest = nullptr; ///< Used for shortcut/cache.
+  const MEFBody *LastRequestMEF = nullptr; ///< Used for shortcut/cache.
   MachineFunction *LastResult = nullptr; ///< Used for shortcut/cache.
 
 public:
@@ -160,14 +162,17 @@ public:
   /// Returns the MachineFunction constructed for the IR function \p F.
   /// Creates a new MachineFunction if none exists yet.
   MachineFunction &getOrCreateMachineFunction(const Function &F);
+  MachineFunction &getOrCreateMachineFunction(const MEFBody &B);
 
   /// \bried Returns the MachineFunction associated to IR function \p F if there
   /// is one, otherwise nullptr.
   MachineFunction *getMachineFunction(const Function &F) const;
+  MachineFunction *getMachineFunction(const MEFBody &B) const;
 
   /// Delete the MachineFunction \p MF and reset the link in the IR Function to
   /// Machine Function map.
   void deleteMachineFunctionFor(Function &F);
+  void deleteMachineFunctionFor(MEFBody &B);
 
   /// Keep track of various per-function pieces of information for backends
   /// that would like to do so.

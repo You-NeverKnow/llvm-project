@@ -129,14 +129,29 @@ static inline unsigned getFnStackAlignment(const TargetSubtargetInfo *STI,
     return F.getFnStackAlignment();
   return STI->getFrameLowering()->getStackAlignment();
 }
+static inline unsigned getFnStackAlignment(const TargetSubtargetInfo *STI,
+                                           const MEFBody &B) {
+//  if (F.hasFnAttribute(Attribute::StackAlignment))
+//    return F.getFnStackAlignment();
+  return STI->getFrameLowering()->getStackAlignment();
+}
 
 MachineFunction::MachineFunction(const Function &F,
                                  const LLVMTargetMachine &Target,
                                  const TargetSubtargetInfo &STI,
                                  unsigned FunctionNum, MachineModuleInfo &mmi)
-    : F(F), Target(Target), STI(&STI), Ctx(mmi.getContext()), MMI(mmi) {
+    : F(&F), Target(Target), STI(&STI), Ctx(mmi.getContext()), MMI(mmi) {
   FunctionNumber = FunctionNum;
   init();
+}
+
+MachineFunction::MachineFunction(const MEFBody &B,
+                                 const LLVMTargetMachine &Target,
+                                 const TargetSubtargetInfo &STI,
+                                 unsigned FunctionNum, MachineModuleInfo &mmi)
+    : B(&B), Target(Target), STI(&STI), Ctx(mmi.getContext()), MMI(mmi) {
+  FunctionNumber = FunctionNum;
+  initMEF();
 }
 
 void MachineFunction::handleInsertion(MachineInstr &MI) {
@@ -151,6 +166,7 @@ void MachineFunction::handleRemoval(MachineInstr &MI) {
 
 void MachineFunction::init() {
   // Assume the function starts in SSA form with correct liveness.
+  const Function & Fn = *F;
   Properties.set(MachineFunctionProperties::Property::IsSSA);
   Properties.set(MachineFunctionProperties::Property::TracksLiveness);
   if (STI->getRegisterInfo())
@@ -162,21 +178,21 @@ void MachineFunction::init() {
   // We can realign the stack if the target supports it and the user hasn't
   // explicitly asked us not to.
   bool CanRealignSP = STI->getFrameLowering()->isStackRealignable() &&
-                      !F.hasFnAttribute("no-realign-stack");
+                      !Fn.hasFnAttribute("no-realign-stack");
   FrameInfo = new (Allocator) MachineFrameInfo(
-      getFnStackAlignment(STI, F), /*StackRealignable=*/CanRealignSP,
+      getFnStackAlignment(STI, Fn), /*StackRealignable=*/CanRealignSP,
       /*ForcedRealign=*/CanRealignSP &&
-          F.hasFnAttribute(Attribute::StackAlignment));
+          Fn.hasFnAttribute(Attribute::StackAlignment));
 
-  if (F.hasFnAttribute(Attribute::StackAlignment))
-    FrameInfo->ensureMaxAlignment(F.getFnStackAlignment());
+  if (Fn.hasFnAttribute(Attribute::StackAlignment))
+    FrameInfo->ensureMaxAlignment(Fn.getFnStackAlignment());
 
   ConstantPool = new (Allocator) MachineConstantPool(getDataLayout());
   Alignment = STI->getTargetLowering()->getMinFunctionAlignment();
 
   // FIXME: Shouldn't use pref alignment if explicit alignment is set on F.
   // FIXME: Use Function::hasOptSize().
-  if (!F.hasFnAttribute(Attribute::OptimizeForSize))
+  if (!Fn.hasFnAttribute(Attribute::OptimizeForSize))
     Alignment = std::max(Alignment,
                          STI->getTargetLowering()->getPrefFunctionAlignment());
 
@@ -186,12 +202,67 @@ void MachineFunction::init() {
   JumpTableInfo = nullptr;
 
   if (isFuncletEHPersonality(classifyEHPersonality(
-          F.hasPersonalityFn() ? F.getPersonalityFn() : nullptr))) {
+          Fn.hasPersonalityFn() ? Fn.getPersonalityFn() : nullptr))) {
     WinEHInfo = new (Allocator) WinEHFuncInfo();
   }
 
   if (isScopedEHPersonality(classifyEHPersonality(
-          F.hasPersonalityFn() ? F.getPersonalityFn() : nullptr))) {
+          Fn.hasPersonalityFn() ? Fn.getPersonalityFn() : nullptr))) {
+    WasmEHInfo = new (Allocator) WasmEHFuncInfo();
+  }
+
+  assert(Target.isCompatibleDataLayout(getDataLayout()) &&
+         "Can't create a MachineFunction using a Module with a "
+         "Target-incompatible DataLayout attached\n");
+
+  PSVManager =
+    llvm::make_unique<PseudoSourceValueManager>(*(getSubtarget().
+                                                  getInstrInfo()));
+}
+void MachineFunction::initMEF() {
+    const MEFBody &Body = *B;
+  // Assume the function starts in SSA form with correct liveness.
+  Properties.set(MachineFunctionProperties::Property::IsSSA);
+  Properties.set(MachineFunctionProperties::Property::TracksLiveness);
+  if (STI->getRegisterInfo())
+    RegInfo = new (Allocator) MachineRegisterInfo(this);
+  else
+    RegInfo = nullptr;
+
+  MFInfo = nullptr;
+  // We can realign the stack if the target supports it and the user hasn't
+  // explicitly asked us not to.
+  bool CanRealignSP = STI->getFrameLowering()->isStackRealignable();
+//                      !B.hasFnAttribute("no-realign-stack"); :TODO:: Avoiding fn attributes for now
+  FrameInfo = new (Allocator) MachineFrameInfo(
+      getFnStackAlignment(STI, Body), /*StackRealignable=*/CanRealignSP,
+      /*ForcedRealign=*/CanRealignSP );
+//          F.hasFnAttribute(Attribute::StackAlignment));
+
+//  if (F.hasFnAttribute(Attribute::StackAlignment))
+//    FrameInfo->ensureMaxAlignment(F.getFnStackAlignment());
+
+  ConstantPool = new (Allocator) MachineConstantPool(getDataLayout());
+  Alignment = STI->getTargetLowering()->getMinFunctionAlignment();
+
+  // FIXME: Shouldn't use pref alignment if explicit alignment is set on F.
+  // FIXME: Use Function::hasOptSize().
+//  if (!F.hasFnAttribute(Attribute::OptimizeForSize))
+//    Alignment = std::max(Alignment,
+//                         STI->getTargetLowering()->getPrefFunctionAlignment());
+
+  if (AlignAllFunctions)
+    Alignment = AlignAllFunctions;
+
+  JumpTableInfo = nullptr;
+
+  if (isFuncletEHPersonality(classifyEHPersonality(
+          /*F.hasPersonalityFn() ? F.getPersonalityFn() :*/ nullptr))) {
+    WinEHInfo = new (Allocator) WinEHFuncInfo();
+  }
+
+  if (isScopedEHPersonality(classifyEHPersonality(
+          /*F.hasPersonalityFn() ? F.getPersonalityFn() :*/  nullptr))) {
     WasmEHInfo = new (Allocator) WasmEHFuncInfo();
   }
 
@@ -255,7 +326,7 @@ void MachineFunction::clear() {
 }
 
 const DataLayout &MachineFunction::getDataLayout() const {
-  return F.getParent()->getDataLayout();
+  return (*F).getParent()->getDataLayout();
 }
 
 /// Get the JumpTableInfo for this function.
