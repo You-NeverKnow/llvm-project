@@ -1005,7 +1005,12 @@ public:
 //
 template <> struct GraphTraits<MachineFunction*> :
   public GraphTraits<MachineBasicBlock*> {
-  static NodeRef getEntryNode(MachineFunction *F) { return &F->front(); }
+  static NodeRef getEntryNode(MachineFunction *F) {
+      if (F->getFunctionMEF()) {
+          const_cast<MachineFunction*>(F)->CreateMachineBasicBlock(&(F->getFunctionMEF()->getPseudoEntryBlock()));
+      }
+      return &F->front();
+  }
 
   // nodes_iterator/begin/end - Allow iteration over all nodes in the graph
   using nodes_iterator = pointer_iterator<MachineFunction::iterator>;

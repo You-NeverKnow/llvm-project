@@ -239,6 +239,8 @@ public:
   }
 
   const DataLayout &getDataLayout() const {
+    if (getMF().getFunctionMEF())
+        return getMF().getFunctionMEF()->getParent()->getDataLayout();
     return getMF().getFunction().getParent()->getDataLayout();
   }
 

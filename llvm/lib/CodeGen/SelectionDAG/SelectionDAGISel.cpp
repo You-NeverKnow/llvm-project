@@ -382,6 +382,38 @@ static void SplitCriticalSideEffectEdges(Function &Fn, DominatorTree *DT,
       }
   }
 }
+static void SplitCriticalSideEffectEdges(MEFBody &FnBody, DominatorTree *DT,
+                                         LoopInfo *LI) {
+  // Loop for blocks with phi nodes.
+  for (BasicBlock &BB : FnBody) {
+    PHINode *PN = dyn_cast<PHINode>(BB.begin());
+    if (!PN) continue;
+
+  ReprocessBlock:
+    // For each block with a PHI node, check to see if any of the input values
+    // are potentially trapping constant expressions.  Constant expressions are
+    // the only potentially trapping value that can occur as the argument to a
+    // PHI.
+    for (BasicBlock::iterator I = BB.begin(); (PN = dyn_cast<PHINode>(I)); ++I)
+      for (unsigned i = 0, e = PN->getNumIncomingValues(); i != e; ++i) {
+        ConstantExpr *CE = dyn_cast<ConstantExpr>(PN->getIncomingValue(i));
+        if (!CE || !CE->canTrap()) continue;
+
+        // The only case we have to worry about is when the edge is critical.
+        // Since this block has a PHI Node, we assume it has multiple input
+        // edges: check to see if the pred has multiple successors.
+        BasicBlock *Pred = PN->getIncomingBlock(i);
+        if (Pred->getTerminator()->getNumSuccessors() == 1)
+          continue;
+
+        // Okay, we have to split this edge.
+        SplitCriticalEdge(
+            Pred->getTerminator(), GetSuccessorNumber(Pred, &BB),
+            CriticalEdgeSplittingOptions(DT, LI).setMergeIdenticalEdges());
+        goto ReprocessBlock;
+      }
+  }
+}
 
 static void computeUsesMSVCFloatingPoint(const Triple &TT, const Function &F,
                                          MachineModuleInfo &MMI) {
@@ -491,6 +523,296 @@ bool SelectionDAGISel::runOnMachineFunction(MachineFunction &mf) {
       break;
     }
   }
+
+  MachineBasicBlock *EntryMBB = &MF->front();
+  if (FuncInfo->SplitCSR)
+    // This performs initialization so lowering for SplitCSR will be correct.
+    TLI->initializeSplitCSR(EntryMBB);
+
+  SelectAllBasicBlocks(Fn);
+  if (FastISelFailed && EnableFastISelFallbackReport) {
+    DiagnosticInfoISelFallback DiagFallback(Fn);
+    Fn.getContext().diagnose(DiagFallback);
+  }
+
+  // Replace forward-declared registers with the registers containing
+  // the desired value.
+  // Note: it is important that this happens **before** the call to
+  // EmitLiveInCopies, since implementations can skip copies of unused
+  // registers. If we don't apply the reg fixups before, some registers may
+  // appear as unused and will be skipped, resulting in bad MI.
+  MachineRegisterInfo &MRI = MF->getRegInfo();
+  for (DenseMap<unsigned, unsigned>::iterator I = FuncInfo->RegFixups.begin(),
+                                              E = FuncInfo->RegFixups.end();
+       I != E; ++I) {
+    unsigned From = I->first;
+    unsigned To = I->second;
+    // If To is also scheduled to be replaced, find what its ultimate
+    // replacement is.
+    while (true) {
+      DenseMap<unsigned, unsigned>::iterator J = FuncInfo->RegFixups.find(To);
+      if (J == E)
+        break;
+      To = J->second;
+    }
+    // Make sure the new register has a sufficiently constrained register class.
+    if (TargetRegisterInfo::isVirtualRegister(From) &&
+        TargetRegisterInfo::isVirtualRegister(To))
+      MRI.constrainRegClass(To, MRI.getRegClass(From));
+    // Replace it.
+
+    // Replacing one register with another won't touch the kill flags.
+    // We need to conservatively clear the kill flags as a kill on the old
+    // register might dominate existing uses of the new register.
+    if (!MRI.use_empty(To))
+      MRI.clearKillFlags(From);
+    MRI.replaceRegWith(From, To);
+  }
+
+  // If the first basic block in the function has live ins that need to be
+  // copied into vregs, emit the copies into the top of the block before
+  // emitting the code for the block.
+  const TargetRegisterInfo &TRI = *MF->getSubtarget().getRegisterInfo();
+  RegInfo->EmitLiveInCopies(EntryMBB, TRI, *TII);
+
+  // Insert copies in the entry block and the return blocks.
+  if (FuncInfo->SplitCSR) {
+    SmallVector<MachineBasicBlock*, 4> Returns;
+    // Collect all the return blocks.
+    for (MachineBasicBlock &MBB : mf) {
+      if (!MBB.succ_empty())
+        continue;
+
+      MachineBasicBlock::iterator Term = MBB.getFirstTerminator();
+      if (Term != MBB.end() && Term->isReturn()) {
+        Returns.push_back(&MBB);
+        continue;
+      }
+    }
+    TLI->insertCopiesSplitCSR(EntryMBB, Returns);
+  }
+
+  DenseMap<unsigned, unsigned> LiveInMap;
+  if (!FuncInfo->ArgDbgValues.empty())
+    for (std::pair<unsigned, unsigned> LI : RegInfo->liveins())
+      if (LI.second)
+        LiveInMap.insert(LI);
+
+  // Insert DBG_VALUE instructions for function arguments to the entry block.
+  for (unsigned i = 0, e = FuncInfo->ArgDbgValues.size(); i != e; ++i) {
+    MachineInstr *MI = FuncInfo->ArgDbgValues[e-i-1];
+    bool hasFI = MI->getOperand(0).isFI();
+    Register Reg =
+        hasFI ? TRI.getFrameRegister(*MF) : MI->getOperand(0).getReg();
+    if (TargetRegisterInfo::isPhysicalRegister(Reg))
+      EntryMBB->insert(EntryMBB->begin(), MI);
+    else {
+      MachineInstr *Def = RegInfo->getVRegDef(Reg);
+      if (Def) {
+        MachineBasicBlock::iterator InsertPos = Def;
+        // FIXME: VR def may not be in entry block.
+        Def->getParent()->insert(std::next(InsertPos), MI);
+      } else
+        LLVM_DEBUG(dbgs() << "Dropping debug info for dead vreg"
+                          << TargetRegisterInfo::virtReg2Index(Reg) << "\n");
+    }
+
+    // If Reg is live-in then update debug info to track its copy in a vreg.
+    DenseMap<unsigned, unsigned>::iterator LDI = LiveInMap.find(Reg);
+    if (LDI != LiveInMap.end()) {
+      assert(!hasFI && "There's no handling of frame pointer updating here yet "
+                       "- add if needed");
+      MachineInstr *Def = RegInfo->getVRegDef(LDI->second);
+      MachineBasicBlock::iterator InsertPos = Def;
+      const MDNode *Variable = MI->getDebugVariable();
+      const MDNode *Expr = MI->getDebugExpression();
+      DebugLoc DL = MI->getDebugLoc();
+      bool IsIndirect = MI->isIndirectDebugValue();
+      if (IsIndirect)
+        assert(MI->getOperand(1).getImm() == 0 &&
+               "DBG_VALUE with nonzero offset");
+      assert(cast<DILocalVariable>(Variable)->isValidLocationForIntrinsic(DL) &&
+             "Expected inlined-at fields to agree");
+      // Def is never a terminator here, so it is ok to increment InsertPos.
+      BuildMI(*EntryMBB, ++InsertPos, DL, TII->get(TargetOpcode::DBG_VALUE),
+              IsIndirect, LDI->second, Variable, Expr);
+
+      // If this vreg is directly copied into an exported register then
+      // that COPY instructions also need DBG_VALUE, if it is the only
+      // user of LDI->second.
+      MachineInstr *CopyUseMI = nullptr;
+      for (MachineRegisterInfo::use_instr_iterator
+           UI = RegInfo->use_instr_begin(LDI->second),
+           E = RegInfo->use_instr_end(); UI != E; ) {
+        MachineInstr *UseMI = &*(UI++);
+        if (UseMI->isDebugValue()) continue;
+        if (UseMI->isCopy() && !CopyUseMI && UseMI->getParent() == EntryMBB) {
+          CopyUseMI = UseMI; continue;
+        }
+        // Otherwise this is another use or second copy use.
+        CopyUseMI = nullptr; break;
+      }
+      if (CopyUseMI) {
+        // Use MI's debug location, which describes where Variable was
+        // declared, rather than whatever is attached to CopyUseMI.
+        MachineInstr *NewMI =
+            BuildMI(*MF, DL, TII->get(TargetOpcode::DBG_VALUE), IsIndirect,
+                    CopyUseMI->getOperand(0).getReg(), Variable, Expr);
+        MachineBasicBlock::iterator Pos = CopyUseMI;
+        EntryMBB->insertAfter(Pos, NewMI);
+      }
+    }
+  }
+
+  // Determine if there are any calls in this machine function.
+  MachineFrameInfo &MFI = MF->getFrameInfo();
+  for (const auto &MBB : *MF) {
+    if (MFI.hasCalls() && MF->hasInlineAsm())
+      break;
+
+    for (const auto &MI : MBB) {
+      const MCInstrDesc &MCID = TII->get(MI.getOpcode());
+      if ((MCID.isCall() && !MCID.isReturn()) ||
+          MI.isStackAligningInlineAsm()) {
+        MFI.setHasCalls(true);
+      }
+      if (MI.isInlineAsm()) {
+        MF->setHasInlineAsm(true);
+      }
+    }
+  }
+
+  // Determine if there is a call to setjmp in the machine function.
+  MF->setExposesReturnsTwice(Fn.callsFunctionThatReturnsTwice());
+
+  // Determine if floating point is used for msvc
+  computeUsesMSVCFloatingPoint(TM.getTargetTriple(), Fn, MF->getMMI());
+
+  // Replace forward-declared registers with the registers containing
+  // the desired value.
+  for (DenseMap<unsigned, unsigned>::iterator
+       I = FuncInfo->RegFixups.begin(), E = FuncInfo->RegFixups.end();
+       I != E; ++I) {
+    unsigned From = I->first;
+    unsigned To = I->second;
+    // If To is also scheduled to be replaced, find what its ultimate
+    // replacement is.
+    while (true) {
+      DenseMap<unsigned, unsigned>::iterator J = FuncInfo->RegFixups.find(To);
+      if (J == E) break;
+      To = J->second;
+    }
+    // Make sure the new register has a sufficiently constrained register class.
+    if (TargetRegisterInfo::isVirtualRegister(From) &&
+        TargetRegisterInfo::isVirtualRegister(To))
+      MRI.constrainRegClass(To, MRI.getRegClass(From));
+    // Replace it.
+
+
+    // Replacing one register with another won't touch the kill flags.
+    // We need to conservatively clear the kill flags as a kill on the old
+    // register might dominate existing uses of the new register.
+    if (!MRI.use_empty(To))
+      MRI.clearKillFlags(From);
+    MRI.replaceRegWith(From, To);
+  }
+
+  TLI->finalizeLowering(*MF);
+
+  // Release function-specific state. SDB and CurDAG are already cleared
+  // at this point.
+  FuncInfo->clear();
+
+  LLVM_DEBUG(dbgs() << "*** MachineFunction at end of ISel ***\n");
+  LLVM_DEBUG(MF->print(dbgs()));
+
+  return true;
+}
+
+bool SelectionDAGISel::runOnMachineFunctionMEF(MachineFunction &mf) {
+  // If we already selected that function, we do not need to run SDISel.
+  if (mf.getProperties().hasProperty(
+          MachineFunctionProperties::Property::Selected))
+    return false;
+  // Do some sanity-checking on the command-line options.
+  assert((!EnableFastISelAbort || TM.Options.EnableFastISel) &&
+         "-fast-isel-abort > 0 requires -fast-isel");
+
+  const MEFBody &FnBody = *(mf.getFunctionMEF());
+  MF = &mf;
+
+  // Reset the target options before resetting the optimization
+  // level below.
+  // FIXME: This is a horrible hack and should be processed via
+  // codegen looking at the optimization level explicitly when
+  // it wants to look at it.
+//  TM.resetTargetOptions(Fn);
+  // Reset OptLevel to None for optnone functions.
+//  CodeGenOpt::Level NewOptLevel = OptLevel;
+//  if (OptLevel != CodeGenOpt::None && skipFunction(Fn))
+//    NewOptLevel = CodeGenOpt::None;
+//  OptLevelChanger OLC(*this, NewOptLevel);
+
+  TII = MF->getSubtarget().getInstrInfo();
+  TLI = MF->getSubtarget().getTargetLowering();
+  RegInfo = &MF->getRegInfo();
+  LibInfo = &getAnalysis<TargetLibraryInfoWrapperPass>().getTLI();
+//  GFI = Fn.hasGC() ? &getAnalysis<GCModuleInfo>().getFunctionInfo(Fn) : nullptr;
+//  ORE = make_unique<OptimizationRemarkEmitter>(&Fn);
+//  auto *DTWP = getAnalysisIfAvailable<DominatorTreeWrapperPass>();
+  DominatorTree *DT = /*DTWP ? &DTWP->getDomTree() :*/ nullptr;
+  auto *LIWP = getAnalysisIfAvailable<LoopInfoWrapperPass>();
+  LoopInfo *LI = LIWP ? &LIWP->getLoopInfo() : nullptr;
+
+//  LLVM_DEBUG(dbgs() << "\n\n\n=== " << Fn.getName() << "\n");
+
+  SplitCriticalSideEffectEdges(const_cast<MEFBody &>(FnBody), DT, LI);
+
+  CurDAG->init(*MF, *ORE, this, LibInfo,
+   getAnalysisIfAvailable<LegacyDivergenceAnalysis>());
+  FuncInfo->set(Fn, *MF, CurDAG);
+  SwiftError->setFunction(*MF);
+
+  // Now get the optional analyzes if we want to.
+  // This is based on the possibly changed OptLevel (after optnone is taken
+  // into account).  That's unfortunate but OK because it just means we won't
+  // ask for passes that have been required anyway.
+
+//  if (UseMBPI && OptLevel != CodeGenOpt::None)
+//    FuncInfo->BPI = &getAnalysis<BranchProbabilityInfoWrapperPass>().getBPI();
+//  else :TODO:: going with CodeGenOPT::None for now
+    FuncInfo->BPI = nullptr;
+
+//  if (OptLevel != CodeGenOpt::None)
+//    AA = &getAnalysis<AAResultsWrapperPass>().getAAResults();
+//  else
+    AA = nullptr;
+
+  SDB->init(GFI, AA, LibInfo);
+
+  MF->setHasInlineAsm(false);
+
+  FuncInfo->SplitCSR = false;
+
+  // We split CSR if the target supports it for the given function
+  // and the function has only return exits.
+//  if (OptLevel != CodeGenOpt::None && TLI->supportSplitCSR(MF)) {
+//    FuncInfo->SplitCSR = true;
+//
+//    // Collect all the return blocks.
+//    for (const BasicBlock &BB : Fn) {
+//      if (!succ_empty(&BB))
+//        continue;
+//
+//      const Instruction *Term = BB.getTerminator();
+//      if (isa<UnreachableInst>(Term) || isa<ReturnInst>(Term))
+//        continue;
+//
+//      // Bail out if the exit block is not Return nor Unreachable.
+//      FuncInfo->SplitCSR = false;
+//      break;
+//    }
+//  }
 
   MachineBasicBlock *EntryMBB = &MF->front();
   if (FuncInfo->SplitCSR)

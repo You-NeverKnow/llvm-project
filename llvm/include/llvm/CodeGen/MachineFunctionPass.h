@@ -44,6 +44,7 @@ protected:
   /// desired machine code transformation or analysis.
   ///
   virtual bool runOnMachineFunction(MachineFunction &MF) = 0;
+  virtual bool runOnMachineFunctionMEF(MachineFunction &MF) {return false;};
 
   /// getAnalysisUsage - Subclasses that override getAnalysisUsage
   /// must call this.

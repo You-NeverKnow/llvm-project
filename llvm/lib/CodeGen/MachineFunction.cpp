@@ -547,6 +547,8 @@ LLVM_DUMP_METHOD void MachineFunction::dump() const {
 #endif
 
 StringRef MachineFunction::getName() const {
+    if (B)
+        return B->getName();
   return getFunction().getName();
 }
 
@@ -728,7 +730,7 @@ MCSymbol *MachineFunction::addLandingPad(MachineBasicBlock *LandingPad) {
   const Instruction *FirstI = LandingPad->getBasicBlock()->getFirstNonPHI();
   if (const auto *LPI = dyn_cast<LandingPadInst>(FirstI)) {
     if (const auto *PF =
-            dyn_cast<Function>(F.getPersonalityFn()->stripPointerCasts()))
+            dyn_cast<Function>(F->getPersonalityFn()->stripPointerCasts()))
       getMMI().addPersonality(PF);
 
     if (LPI->isCleanup())

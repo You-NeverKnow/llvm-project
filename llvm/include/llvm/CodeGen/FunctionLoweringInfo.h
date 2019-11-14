@@ -53,6 +53,7 @@ class TargetLowering;
 class FunctionLoweringInfo {
 public:
   const Function *Fn;
+  const MEFBody *FnBody;
   MachineFunction *MF;
   const TargetLowering *TLI;
   MachineRegisterInfo *RegInfo;
@@ -187,6 +188,7 @@ public:
   /// and its associated MachineFunction.
   ///
   void set(const Function &Fn, MachineFunction &MF, SelectionDAG *DAG);
+  void set(const MEFBody &FnBody, MachineFunction &MF, SelectionDAG *DAG);
 
   /// clear - Clear out all the function-specific state. This returns this
   /// FunctionLoweringInfo to an empty state, ready to be used for a

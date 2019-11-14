@@ -74,6 +74,7 @@ public:
   void getAnalysisUsage(AnalysisUsage &AU) const override;
 
   bool runOnMachineFunction(MachineFunction &MF) override;
+  bool runOnMachineFunctionMEF(MachineFunction &MF) override;
 
   virtual void EmitFunctionEntryCode() {}
 

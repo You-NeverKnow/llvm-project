@@ -302,7 +302,6 @@ MachineModuleInfo::getOrCreateMachineFunction(const MEFBody &B) {
   if (I.second) {
     // No pre-existing machine function, create a new one.
     const TargetSubtargetInfo &STI = *TM.getSubtargetImpl(B);
-    const Function F {};
     MF = new MachineFunction(B, TM, STI, NextFnNum++, *this);
     // Update the set entry.
     I.first->second.reset(MF);
@@ -318,6 +317,12 @@ MachineModuleInfo::getOrCreateMachineFunction(const MEFBody &B) {
 void MachineModuleInfo::deleteMachineFunctionFor(Function &F) {
   MachineFunctions.erase(&F);
   LastRequest = nullptr;
+  LastResult = nullptr;
+}
+
+void MachineModuleInfo::deleteMachineFunctionFor(MEFBody &B) {
+  MachineFunctionsMEF.erase(&B);
+  LastRequestMEF = nullptr;
   LastResult = nullptr;
 }
 
@@ -338,6 +343,12 @@ public:
   bool runOnFunction(Function &F) override {
     MachineModuleInfo &MMI = getAnalysis<MachineModuleInfo>();
     MMI.deleteMachineFunctionFor(F);
+    return true;
+  }
+
+  bool runOnFunctionMEF(MEFBody &B) override {
+    MachineModuleInfo &MMI = getAnalysis<MachineModuleInfo>();
+    MMI.deleteMachineFunctionFor(B);
     return true;
   }
 

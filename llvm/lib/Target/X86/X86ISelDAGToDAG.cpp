@@ -195,6 +195,22 @@ namespace {
       return true;
     }
 
+    bool runOnMachineFunctionMEF(MachineFunction &MF) override {
+      // Reset the subtarget each time through.
+      Subtarget = &MF.getSubtarget<X86Subtarget>();
+//      IndirectTlsSegRefs = MF.getFunction().hasFnAttribute(
+//                             "indirect-tls-seg-refs");
+
+      // OptFor[Min]Size are used in pattern predicates that isel is matching.
+//      OptForSize = MF.getFunction().hasOptSize();
+//      OptForMinSize = MF.getFunction().hasMinSize();
+//      assert((!OptForMinSize || OptForSize) &&
+//             "OptForMinSize implies OptForSize");
+
+      SelectionDAGISel::runOnMachineFunction(MF);
+      return true;
+    }
+
     void EmitFunctionEntryCode() override;
 
     bool IsProfitableToFold(SDValue N, SDNode *U, SDNode *Root) const override;

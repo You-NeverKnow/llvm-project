@@ -10,6 +10,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include <iostream>
 #include "llvm/CodeGen/MachineFunctionPass.h"
 #include "llvm/Analysis/AliasAnalysis.h"
 #include "llvm/Analysis/BasicAliasAnalysis.h"
@@ -137,6 +138,8 @@ bool MachineFunctionPass::runOnFunctionMEF(MEFBody &B) {
 //    CountBefore = MF.getInstructionCount();
 
   bool RV = runOnMachineFunction(MF);
+    // debug
+    std::cout << "Successfully ran MF: " << (std::string) MF.getName() << '\n';
 
 //  if (ShouldEmitSizeRemarks) {
 //    // We wanted size remarks. Check if there was a change to the number of
