@@ -137,7 +137,7 @@ bool MachineFunctionPass::runOnFunctionMEF(MEFBody &B) {
 //  if (ShouldEmitSizeRemarks)
 //    CountBefore = MF.getInstructionCount();
 
-  bool RV = runOnMachineFunction(MF);
+  bool RV = runOnMachineFunctionMEF(MF);
     // debug
     std::cout << "Successfully ran MF: " << (std::string) MF.getName() << '\n';
 

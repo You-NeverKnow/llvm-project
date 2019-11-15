@@ -438,6 +438,29 @@ static void computeUsesMSVCFloatingPoint(const Triple &TT, const Function &F,
     }
   }
 }
+static void computeUsesMSVCFloatingPoint(const Triple &TT, const MEFBody &B,
+                                         MachineModuleInfo &MMI) {
+  // Only needed for MSVC
+  if (!TT.isWindowsMSVCEnvironment())
+    return;
+
+  // If it's already set, nothing to do.
+  if (MMI.usesMSVCFloatingPoint())
+    return;
+
+  for (const Instruction &I : instructions(B)) {
+    if (I.getType()->isFPOrFPVectorTy()) {
+      MMI.setUsesMSVCFloatingPoint(true);
+      return;
+    }
+    for (const auto &Op : I.operands()) {
+      if (Op->getType()->isFPOrFPVectorTy()) {
+        MMI.setUsesMSVCFloatingPoint(true);
+        return;
+      }
+    }
+  }
+}
 
 bool SelectionDAGISel::runOnMachineFunction(MachineFunction &mf) {
   // If we already selected that function, we do not need to run SDISel.
@@ -768,10 +791,10 @@ bool SelectionDAGISel::runOnMachineFunctionMEF(MachineFunction &mf) {
 
   SplitCriticalSideEffectEdges(const_cast<MEFBody &>(FnBody), DT, LI);
 
-  CurDAG->init(*MF, *ORE, this, LibInfo,
+  CurDAG->initMEF(*MF, *ORE, this, LibInfo,
    getAnalysisIfAvailable<LegacyDivergenceAnalysis>());
-  FuncInfo->set(Fn, *MF, CurDAG);
-  SwiftError->setFunction(*MF);
+  FuncInfo->set(FnBody, *MF, CurDAG);
+//  SwiftError->setFunction(*MF);
 
   // Now get the optional analyzes if we want to.
   // This is based on the possibly changed OptLevel (after optnone is taken
@@ -819,11 +842,11 @@ bool SelectionDAGISel::runOnMachineFunctionMEF(MachineFunction &mf) {
     // This performs initialization so lowering for SplitCSR will be correct.
     TLI->initializeSplitCSR(EntryMBB);
 
-  SelectAllBasicBlocks(Fn);
-  if (FastISelFailed && EnableFastISelFallbackReport) {
-    DiagnosticInfoISelFallback DiagFallback(Fn);
-    Fn.getContext().diagnose(DiagFallback);
-  }
+  SelectAllBasicBlocks(FnBody);
+//  if (FastISelFailed && EnableFastISelFallbackReport) {
+//    DiagnosticInfoISelFallback DiagFallback(Fn);
+//    FnBody.getContext().diagnose(DiagFallback);
+//  }
 
   // Replace forward-declared registers with the registers containing
   // the desired value.
@@ -973,10 +996,10 @@ bool SelectionDAGISel::runOnMachineFunctionMEF(MachineFunction &mf) {
   }
 
   // Determine if there is a call to setjmp in the machine function.
-  MF->setExposesReturnsTwice(Fn.callsFunctionThatReturnsTwice());
+//  MF->setExposesReturnsTwice(Fn.callsFunctionThatReturnsTwice());
 
   // Determine if floating point is used for msvc
-  computeUsesMSVCFloatingPoint(TM.getTargetTriple(), Fn, MF->getMMI());
+  computeUsesMSVCFloatingPoint(TM.getTargetTriple(), FnBody, MF->getMMI());
 
   // Replace forward-declared registers with the registers containing
   // the desired value.
@@ -1926,6 +1949,290 @@ void SelectionDAGISel::SelectAllBasicBlocks(const Function &Fn) {
   SP.copyToMachineFrameInfo(MF->getFrameInfo());
 
   SwiftError->propagateVRegs();
+
+  delete FastIS;
+  SDB->clearDanglingDebugInfo();
+  SDB->SPDescriptor.resetPerFunctionState();
+}
+
+void SelectionDAGISel::SelectAllBasicBlocks(const MEFBody &FnBody) {
+  FastISelFailed = false;
+  // Initialize the Fast-ISel state, if needed.
+  FastISel *FastIS = nullptr;
+  if (TM.Options.EnableFastISel) {
+    LLVM_DEBUG(dbgs() << "Enabling fast-isel\n");
+    FastIS = TLI->createFastISel(*FuncInfo, LibInfo);
+  }
+
+  ReversePostOrderTraversal<const MEFBody*> RPOT(&FnBody);
+
+  // Lower arguments up front. An RPO iteration always visits the entry block
+  // first.
+  assert(*RPOT.begin() == &FnBody.getPseudoEntryBlock());
+  NumEntryBlocks += ((const SwitchInst*) FnBody.getPseudoEntryBlock().getTerminator())->getNumCases();
+
+  // Set up FuncInfo for ISel. Entry blocks never have PHIs.
+  auto mefEntries = const_cast<MEFBody&>(FnBody).getMEFEntries();
+
+  for (auto entry: mefEntries) {
+      FuncInfo->MBB = FuncInfo->MBBMap[&entry->getEntryBlock()];
+      FuncInfo->InsertPt = FuncInfo->MBB->begin();
+
+      CurDAG->setFunctionLoweringInfo(FuncInfo);
+
+      if (!FastIS) {
+          LowerArguments(*entry);
+      } else {
+          // See if fast isel can lower the arguments.
+          FastIS->startNewBlock();
+          if (!FastIS->lowerArgumentsMEF()) {
+              FastISelFailed = true;
+              // Fast isel failed to lower these arguments
+              ++NumFastIselFailLowerArguments;
+
+//              OptimizationRemarkMissed R("sdagisel", "FastISelFailure",
+//                                         Fn.getSubprogram(),
+//                                         &Fn.getEntryBlock());
+//              R << "FastISel didn't lower all arguments: "
+//                << ore::NV("Prototype", E.getType());
+//              reportFastISelFailure(*MF, *ORE, R, EnableFastISelAbort > 1);
+
+              // Use SelectionDAG argument lowering
+              LowerArguments(*entry);
+              CurDAG->setRoot(SDB->getControlRoot());
+              SDB->clear();
+              CodeGenAndEmitDAG();
+          }
+
+          // If we inserted any instructions at the beginning, make a note of
+          // where they are, so we can be sure to emit subsequent instructions
+          // after them.
+          if (FuncInfo->InsertPt != FuncInfo->MBB->begin())
+              FastIS->setLastLocalValue(&*std::prev(FuncInfo->InsertPt));
+          else
+              FastIS->setLastLocalValue(nullptr);
+      }
+
+//      bool Inserted = SwiftError->createEntriesInEntryBlock(SDB->getCurDebugLoc());
+        bool Inserted = false;
+      if (FastIS && Inserted)
+          FastIS->setLastLocalValue(&*std::prev(FuncInfo->InsertPt));
+
+      processDbgDeclares(FuncInfo);
+  }
+
+  // Iterate over all basic blocks in the function.
+  DenseSet<BasicBlock *> EntryBlocks;
+  FnBody.getEntryBlocks(EntryBlocks);
+  StackProtector &SP = getAnalysis<StackProtector>();
+  for (auto iter = ++RPOT.begin(); iter != RPOT.end(); ++iter) {
+    const BasicBlock *LLVMBB = *iter;
+    if (OptLevel != CodeGenOpt::None) {
+      bool AllPredsVisited = true;
+      for (const_pred_iterator PI = pred_begin(LLVMBB), PE = pred_end(LLVMBB);
+           PI != PE; ++PI) {
+        if (!FuncInfo->VisitedBBs.count(*PI)) {
+          AllPredsVisited = false;
+          break;
+        }
+      }
+
+      if (AllPredsVisited) {
+        for (const PHINode &PN : LLVMBB->phis())
+          FuncInfo->ComputePHILiveOutRegInfo(&PN);
+      } else {
+        for (const PHINode &PN : LLVMBB->phis())
+          FuncInfo->InvalidatePHILiveOutRegInfo(&PN);
+      }
+
+      FuncInfo->VisitedBBs.insert(LLVMBB);
+    }
+
+    BasicBlock::const_iterator const Begin =
+        LLVMBB->getFirstNonPHI()->getIterator();
+    BasicBlock::const_iterator const End = LLVMBB->end();
+    BasicBlock::const_iterator BI = End;
+
+    FuncInfo->MBB = FuncInfo->MBBMap[LLVMBB];
+    if (!FuncInfo->MBB)
+      continue; // Some blocks like catchpads have no code or MBB.
+
+    // Insert new instructions after any phi or argument setup code.
+    FuncInfo->InsertPt = FuncInfo->MBB->end();
+
+    // Setup an EH landing-pad block.
+    FuncInfo->ExceptionPointerVirtReg = 0;
+    FuncInfo->ExceptionSelectorVirtReg = 0;
+    if (LLVMBB->isEHPad())
+      if (!PrepareEHLandingPad())
+        continue;
+
+    // Before doing SelectionDAG ISel, see if FastISel has been requested.
+    if (FastIS) {
+        if(EntryBlocks.find(LLVMBB) == EntryBlocks.end())
+    //      if (LLVMBB != &Fn.getEntryBlock())
+            FastIS->startNewBlock();
+
+      unsigned NumFastIselRemaining = std::distance(Begin, End);
+
+      // Pre-assign swifterror vregs.
+//      SwiftError->preassignVRegs(FuncInfo->MBB, Begin, End);
+
+      // Do FastISel on as many instructions as possible.
+      for (; BI != Begin; --BI) {
+        const Instruction *Inst = &*std::prev(BI);
+
+        // If we no longer require this instruction, skip it.
+        if (isFoldedOrDeadInstruction(Inst, FuncInfo) ||
+            ElidedArgCopyInstrs.count(Inst)) {
+          --NumFastIselRemaining;
+          continue;
+        }
+
+        // Bottom-up: reset the insert pos at the top, after any local-value
+        // instructions.
+        FastIS->recomputeInsertPt();
+
+        // Try to select the instruction with FastISel.
+        if (FastIS->selectInstruction(Inst)) {
+          --NumFastIselRemaining;
+          ++NumFastIselSuccess;
+          // If fast isel succeeded, skip over all the folded instructions, and
+          // then see if there is a load right before the selected instructions.
+          // Try to fold the load if so.
+          const Instruction *BeforeInst = Inst;
+          while (BeforeInst != &*Begin) {
+            BeforeInst = &*std::prev(BasicBlock::const_iterator(BeforeInst));
+            if (!isFoldedOrDeadInstruction(BeforeInst, FuncInfo))
+              break;
+          }
+          if (BeforeInst != Inst && isa<LoadInst>(BeforeInst) &&
+              BeforeInst->hasOneUse() &&
+              FastIS->tryToFoldLoad(cast<LoadInst>(BeforeInst), Inst)) {
+            // If we succeeded, don't re-select the load.
+            BI = std::next(BasicBlock::const_iterator(BeforeInst));
+            --NumFastIselRemaining;
+            ++NumFastIselSuccess;
+          }
+          continue;
+        }
+
+        FastISelFailed = true;
+
+        // Then handle certain instructions as single-LLVM-Instruction blocks.
+        // We cannot separate out GCrelocates to their own blocks since we need
+        // to keep track of gc-relocates for a particular gc-statepoint. This is
+        // done by SelectionDAGBuilder::LowerAsSTATEPOINT, called before
+        // visitGCRelocate.
+        if (isa<CallInst>(Inst) && !isStatepoint(Inst) && !isGCRelocate(Inst) &&
+            !isGCResult(Inst)) {
+          OptimizationRemarkMissed R("sdagisel", "FastISelFailure",
+                                     Inst->getDebugLoc(), LLVMBB);
+
+          R << "FastISel missed call";
+
+          if (R.isEnabled() || EnableFastISelAbort) {
+            std::string InstStrStorage;
+            raw_string_ostream InstStr(InstStrStorage);
+            InstStr << *Inst;
+
+            R << ": " << InstStr.str();
+          }
+
+          reportFastISelFailure(*MF, *ORE, R, EnableFastISelAbort > 2);
+
+          if (!Inst->getType()->isVoidTy() && !Inst->getType()->isTokenTy() &&
+              !Inst->use_empty()) {
+            unsigned &R = FuncInfo->ValueMap[Inst];
+            if (!R)
+              R = FuncInfo->CreateRegs(Inst);
+          }
+
+          bool HadTailCall = false;
+          MachineBasicBlock::iterator SavedInsertPt = FuncInfo->InsertPt;
+          SelectBasicBlock(Inst->getIterator(), BI, HadTailCall);
+
+          // If the call was emitted as a tail call, we're done with the block.
+          // We also need to delete any previously emitted instructions.
+          if (HadTailCall) {
+            FastIS->removeDeadCode(SavedInsertPt, FuncInfo->MBB->end());
+            --BI;
+            break;
+          }
+
+          // Recompute NumFastIselRemaining as Selection DAG instruction
+          // selection may have handled the call, input args, etc.
+          unsigned RemainingNow = std::distance(Begin, BI);
+          NumFastIselFailures += NumFastIselRemaining - RemainingNow;
+          NumFastIselRemaining = RemainingNow;
+          continue;
+        }
+
+        OptimizationRemarkMissed R("sdagisel", "FastISelFailure",
+                                   Inst->getDebugLoc(), LLVMBB);
+
+        bool ShouldAbort = EnableFastISelAbort;
+        if (Inst->isTerminator()) {
+          // Use a different message for terminator misses.
+          R << "FastISel missed terminator";
+          // Don't abort for terminator unless the level is really high
+          ShouldAbort = (EnableFastISelAbort > 2);
+        } else {
+          R << "FastISel missed";
+        }
+
+        if (R.isEnabled() || EnableFastISelAbort) {
+          std::string InstStrStorage;
+          raw_string_ostream InstStr(InstStrStorage);
+          InstStr << *Inst;
+          R << ": " << InstStr.str();
+        }
+
+        reportFastISelFailure(*MF, *ORE, R, ShouldAbort);
+
+        NumFastIselFailures += NumFastIselRemaining;
+        break;
+      }
+
+      FastIS->recomputeInsertPt();
+    }
+
+    if (SP.shouldEmitSDCheck(*LLVMBB)) {
+      bool FunctionBasedInstrumentation =
+          TLI->getSSPStackGuardCheck(*FnBody.getParent());
+      SDB->SPDescriptor.initialize(LLVMBB, FuncInfo->MBBMap[LLVMBB],
+                                   FunctionBasedInstrumentation);
+    }
+
+    if (Begin != BI)
+      ++NumDAGBlocks;
+    else
+      ++NumFastIselBlocks;
+
+    if (Begin != BI) {
+      // Run SelectionDAG instruction selection on the remainder of the block
+      // not handled by FastISel. If FastISel is not run, this is the entire
+      // block.
+      bool HadTailCall;
+      SelectBasicBlock(Begin, BI, HadTailCall);
+
+      // But if FastISel was run, we already selected some of the block.
+      // If we emitted a tail-call, we need to delete any previously emitted
+      // instruction that follows it.
+      if (HadTailCall && FuncInfo->InsertPt != FuncInfo->MBB->end())
+        FastIS->removeDeadCode(FuncInfo->InsertPt, FuncInfo->MBB->end());
+    }
+
+    if (FastIS)
+      FastIS->finishBasicBlock();
+    FinishBasicBlock();
+    FuncInfo->PHINodesToUpdate.clear();
+    ElidedArgCopyInstrs.clear();
+  }
+
+  SP.copyToMachineFrameInfo(MF->getFrameInfo());
+
+//  SwiftError->propagateVRegs();
 
   delete FastIS;
   SDB->clearDanglingDebugInfo();

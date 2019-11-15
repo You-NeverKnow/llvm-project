@@ -10,6 +10,7 @@
 #include "llvm/IR/OperandTraits.h"
 #include "BasicBlock.h"
 #include "llvm/IR/Argument.h"
+#include "CallingConv.h"
 
 namespace llvm {
 
@@ -56,13 +57,25 @@ public:
         return V->getValueID() == Value::MEFEntryVal;
     }
 
-    void Register(BasicBlock *block) {
-        entryBlock = block;
-        entryBlock->getParentMEF()->RegisterEntry(entryBlock);
-    }
+    void Register(BasicBlock *block);
 
     const BasicBlock       &getEntryBlock() const   { return *entryBlock; }
     BasicBlock             &getEntryBlock()         { return *entryBlock; }
+
+    /// getCallingConv()/setCallingConv(CC) - These method get and set the
+    /// calling convention of this function.  The enum values for the known
+    /// calling conventions are defined in CallingConv.h.
+    CallingConv::ID getCallingConv() const {
+        return static_cast<CallingConv::ID>((getSubclassDataFromValue() >> 4) &
+                                            CallingConv::MaxID);
+    }
+    void setCallingConv(CallingConv::ID CC) {
+        auto ID = static_cast<unsigned>(CC);
+        assert(!(ID & ~CallingConv::MaxID) && "Unsupported calling convention");
+        setValueSubclassData((getSubclassDataFromValue() & 0xc00f) | (ID << 4));
+    }
+
+    bool isVarArg() const { return getFunctionType()->isVarArg(); }
 
 /// @name Function Argument Iteration
 /// @{

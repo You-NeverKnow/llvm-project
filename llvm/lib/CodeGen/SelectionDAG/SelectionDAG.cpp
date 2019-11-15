@@ -1016,6 +1016,19 @@ void SelectionDAG::init(MachineFunction &NewMF,
   Context = &MF->getFunction().getContext();
   DA = Divergence;
 }
+void SelectionDAG::initMEF(MachineFunction &NewMF,
+                        OptimizationRemarkEmitter &NewORE,
+                        Pass *PassPtr, const TargetLibraryInfo *LibraryInfo,
+                        LegacyDivergenceAnalysis * Divergence) {
+  MF = &NewMF;
+  SDAGISelPass = PassPtr;
+  ORE = &NewORE;
+  TLI = getSubtarget().getTargetLowering();
+  TSI = getSubtarget().getSelectionDAGInfo();
+  LibInfo = LibraryInfo;
+  Context = &MF->getFunctionMEF()->getContext();
+  DA = Divergence;
+}
 
 SelectionDAG::~SelectionDAG() {
   assert(!UpdateListeners && "Dangling registered DAGUpdateListeners");

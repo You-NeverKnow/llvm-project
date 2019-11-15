@@ -327,6 +327,7 @@ private:
 
   /// Perform instruction selection on all basic blocks in the function.
   void SelectAllBasicBlocks(const Function &Fn);
+  void SelectAllBasicBlocks(const MEFBody &FnBody);
 
   /// Perform instruction selection on a single basic block, for
   /// instructions between \p Begin and \p End.  \p HadTailCall will be set
@@ -341,6 +342,7 @@ private:
   /// Generate instructions for lowering the incoming arguments of the
   /// given function.
   void LowerArguments(const Function &F);
+  void LowerArguments(const MEFEntry &E);
 
   void ComputeLiveOutVRegInfo();
 

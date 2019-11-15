@@ -9413,6 +9413,96 @@ findArgumentCopyElisionCandidates(const DataLayout &DL,
       break;
   }
 }
+static void
+findArgumentCopyElisionCandidatesMEF(const DataLayout &DL,
+                                  FunctionLoweringInfo *FuncInfo,
+                                  ArgCopyElisionMapTy &ArgCopyElisionCandidates,
+                                  const MEFEntry & entry) {
+  // Record the state of every static alloca used in the entry block. Argument
+  // allocas are all used in the entry block, so we need approximately as many
+  // entries as we have arguments.
+  enum StaticAllocaInfo { Unknown, Clobbered, Elidable };
+  SmallDenseMap<const AllocaInst *, StaticAllocaInfo, 8> StaticAllocas;
+  unsigned NumArgs = entry.arg_size();
+  StaticAllocas.reserve(NumArgs * 2);
+
+  auto GetInfoIfStaticAlloca = [&](const Value *V) -> StaticAllocaInfo * {
+    if (!V)
+      return nullptr;
+    V = V->stripPointerCasts();
+    const auto *AI = dyn_cast<AllocaInst>(V);
+    if (!AI || !AI->isStaticAlloca() || !FuncInfo->StaticAllocaMap.count(AI))
+      return nullptr;
+    auto Iter = StaticAllocas.insert({AI, Unknown});
+    return &Iter.first->second;
+  };
+
+  // Look for stores of arguments to static allocas. Look through bitcasts and
+  // GEPs to handle type coercions, as long as the alloca is fully initialized
+  // by the store. Any non-store use of an alloca escapes it and any subsequent
+  // unanalyzed store might write it.
+  // FIXME: Handle structs initialized with multiple stores.
+  for (const Instruction &I : entry.getEntryBlock()) {
+    // Look for stores, and handle non-store uses conservatively.
+    const auto *SI = dyn_cast<StoreInst>(&I);
+    if (!SI) {
+      // We will look through cast uses, so ignore them completely.
+      if (I.isCast())
+        continue;
+      // Ignore debug info intrinsics, they don't escape or store to allocas.
+      if (isa<DbgInfoIntrinsic>(I))
+        continue;
+      // This is an unknown instruction. Assume it escapes or writes to all
+      // static alloca operands.
+      for (const Use &U : I.operands()) {
+        if (StaticAllocaInfo *Info = GetInfoIfStaticAlloca(U))
+          *Info = StaticAllocaInfo::Clobbered;
+      }
+      continue;
+    }
+
+    // If the stored value is a static alloca, mark it as escaped.
+    if (StaticAllocaInfo *Info = GetInfoIfStaticAlloca(SI->getValueOperand()))
+      *Info = StaticAllocaInfo::Clobbered;
+
+    // Check if the destination is a static alloca.
+    const Value *Dst = SI->getPointerOperand()->stripPointerCasts();
+    StaticAllocaInfo *Info = GetInfoIfStaticAlloca(Dst);
+    if (!Info)
+      continue;
+    const AllocaInst *AI = cast<AllocaInst>(Dst);
+
+    // Skip allocas that have been initialized or clobbered.
+    if (*Info != StaticAllocaInfo::Unknown)
+      continue;
+
+    // Check if the stored value is an argument, and that this store fully
+    // initializes the alloca. Don't elide copies from the same argument twice.
+    const Value *Val = SI->getValueOperand()->stripPointerCasts();
+    const auto *Arg = dyn_cast<Argument>(Val);
+    if (!Arg || Arg->hasInAllocaAttr() || Arg->hasByValAttr() ||
+        Arg->getType()->isEmptyTy() ||
+        DL.getTypeStoreSize(Arg->getType()) !=
+            DL.getTypeAllocSize(AI->getAllocatedType()) ||
+        ArgCopyElisionCandidates.count(Arg)) {
+      *Info = StaticAllocaInfo::Clobbered;
+      continue;
+    }
+
+    LLVM_DEBUG(dbgs() << "Found argument copy elision candidate: " << *AI
+                      << '\n');
+
+    // Mark this alloca and store for argument copy elision.
+    *Info = StaticAllocaInfo::Elidable;
+    ArgCopyElisionCandidates.insert({Arg, {AI, SI}});
+
+    // Stop scanning if we've seen all arguments. This will happen early in -O0
+    // builds, which is useful, because -O0 builds have large entry blocks and
+    // many allocas.
+    if (ArgCopyElisionCandidates.size() == NumArgs)
+      break;
+  }
+}
 
 /// Try to elide argument copies from memory into a local alloca. Succeeds if
 /// ArgVal is a load from a suitable fixed stack object.
@@ -9735,6 +9825,339 @@ void SelectionDAGISel::LowerArguments(const Function &F) {
         ArgValues.push_back(getCopyFromParts(DAG, dl, &InVals[i], NumParts,
                                              PartVT, VT, nullptr,
                                              F.getCallingConv(), AssertOp));
+      }
+
+      i += NumParts;
+    }
+
+    // We don't need to do anything else for unused arguments.
+    if (ArgValues.empty())
+      continue;
+
+    // Note down frame index.
+    if (FrameIndexSDNode *FI =
+        dyn_cast<FrameIndexSDNode>(ArgValues[0].getNode()))
+      FuncInfo->setArgumentFrameIndex(&Arg, FI->getIndex());
+
+    SDValue Res = DAG.getMergeValues(makeArrayRef(ArgValues.data(), NumValues),
+                                     SDB->getCurSDLoc());
+
+    SDB->setValue(&Arg, Res);
+    if (!TM.Options.EnableFastISel && Res.getOpcode() == ISD::BUILD_PAIR) {
+      // We want to associate the argument with the frame index, among
+      // involved operands, that correspond to the lowest address. The
+      // getCopyFromParts function, called earlier, is swapping the order of
+      // the operands to BUILD_PAIR depending on endianness. The result of
+      // that swapping is that the least significant bits of the argument will
+      // be in the first operand of the BUILD_PAIR node, and the most
+      // significant bits will be in the second operand.
+      unsigned LowAddressOp = DAG.getDataLayout().isBigEndian() ? 1 : 0;
+      if (LoadSDNode *LNode =
+          dyn_cast<LoadSDNode>(Res.getOperand(LowAddressOp).getNode()))
+        if (FrameIndexSDNode *FI =
+            dyn_cast<FrameIndexSDNode>(LNode->getBasePtr().getNode()))
+          FuncInfo->setArgumentFrameIndex(&Arg, FI->getIndex());
+    }
+
+    // Update the SwiftErrorVRegDefMap.
+    if (Res.getOpcode() == ISD::CopyFromReg && isSwiftErrorArg) {
+      unsigned Reg = cast<RegisterSDNode>(Res.getOperand(1))->getReg();
+      if (TargetRegisterInfo::isVirtualRegister(Reg))
+        SwiftError->setCurrentVReg(FuncInfo->MBB, SwiftError->getFunctionArg(),
+                                   Reg);
+    }
+
+    // If this argument is live outside of the entry block, insert a copy from
+    // wherever we got it to the vreg that other BB's will reference it as.
+    if (Res.getOpcode() == ISD::CopyFromReg) {
+      // If we can, though, try to skip creating an unnecessary vreg.
+      // FIXME: This isn't very clean... it would be nice to make this more
+      // general.
+      unsigned Reg = cast<RegisterSDNode>(Res.getOperand(1))->getReg();
+      if (TargetRegisterInfo::isVirtualRegister(Reg)) {
+        FuncInfo->ValueMap[&Arg] = Reg;
+        continue;
+      }
+    }
+    if (!isOnlyUsedInEntryBlock(&Arg, TM.Options.EnableFastISel)) {
+      FuncInfo->InitializeRegForValue(&Arg);
+      SDB->CopyToExportRegsIfNeeded(&Arg);
+    }
+  }
+
+  if (!Chains.empty()) {
+    Chains.push_back(NewRoot);
+    NewRoot = DAG.getNode(ISD::TokenFactor, dl, MVT::Other, Chains);
+  }
+
+  DAG.setRoot(NewRoot);
+
+  assert(i == InVals.size() && "Argument register count mismatch!");
+
+  // If any argument copy elisions occurred and we have debug info, update the
+  // stale frame indices used in the dbg.declare variable info table.
+  MachineFunction::VariableDbgInfoMapTy &DbgDeclareInfo = MF->getVariableDbgInfo();
+  if (!DbgDeclareInfo.empty() && !ArgCopyElisionFrameIndexMap.empty()) {
+    for (MachineFunction::VariableDbgInfo &VI : DbgDeclareInfo) {
+      auto I = ArgCopyElisionFrameIndexMap.find(VI.Slot);
+      if (I != ArgCopyElisionFrameIndexMap.end())
+        VI.Slot = I->second;
+    }
+  }
+
+  // Finally, if the target has anything special to do, allow it to do so.
+  EmitFunctionEntryCode();
+}
+
+void SelectionDAGISel::LowerArguments(const MEFEntry &E) {
+  SelectionDAG &DAG = SDB->DAG;
+  SDLoc dl = SDB->getCurSDLoc();
+  const DataLayout &DL = DAG.getDataLayout();
+  SmallVector<ISD::InputArg, 16> Ins;
+
+  if (!FuncInfo->CanLowerReturn) {
+    // Put in an sret pointer parameter before all the other parameters.
+    SmallVector<EVT, 1> ValueVTs;
+    ComputeValueVTs(*TLI, DAG.getDataLayout(),
+                    E.getReturnType()->getPointerTo(
+                        DAG.getDataLayout().getAllocaAddrSpace()),
+                    ValueVTs);
+
+    // NOTE: Assuming that a pointer will never break down to more than one VT
+    // or one register.
+    ISD::ArgFlagsTy Flags;
+    Flags.setSRet();
+    MVT RegisterVT = TLI->getRegisterType(*DAG.getContext(), ValueVTs[0]);
+    ISD::InputArg RetArg(Flags, RegisterVT, ValueVTs[0], true,
+                         ISD::InputArg::NoArgIndex, 0);
+    Ins.push_back(RetArg);
+  }
+
+  // Look for stores of arguments to static allocas. Mark such arguments with a
+  // flag to ask the target to give us the memory location of that argument if
+  // available.
+  ArgCopyElisionMapTy ArgCopyElisionCandidates;
+  findArgumentCopyElisionCandidatesMEF(DL, FuncInfo, ArgCopyElisionCandidates, E);
+
+  // Set up the incoming argument description vector.
+  for (const Argument &Arg : E.args()) {
+    unsigned ArgNo = Arg.getArgNo();
+    SmallVector<EVT, 4> ValueVTs;
+    ComputeValueVTs(*TLI, DAG.getDataLayout(), Arg.getType(), ValueVTs);
+    bool isArgValueUsed = !Arg.use_empty();
+    unsigned PartBase = 0;
+    Type *FinalType = Arg.getType();
+//    if (Arg.hasAttribute(Attribute::ByVal))
+//      FinalType = Arg.getParamByValType();
+    bool NeedsRegBlock = TLI->functionArgumentNeedsConsecutiveRegisters(
+        FinalType, E.getCallingConv(), E.isVarArg());
+    for (unsigned Value = 0, NumValues = ValueVTs.size();
+         Value != NumValues; ++Value) {
+      EVT VT = ValueVTs[Value];
+      Type *ArgTy = VT.getTypeForEVT(*DAG.getContext());
+      ISD::ArgFlagsTy Flags;
+
+      // Certain targets (such as MIPS), may have a different ABI alignment
+      // for a type depending on the context. Give the target a chance to
+      // specify the alignment it wants.
+      unsigned OriginalAlignment =
+          TLI->getABIAlignmentForCallingConv(ArgTy, DL);
+
+      if (Arg.getType()->isPointerTy()) {
+        Flags.setPointer();
+        Flags.setPointerAddrSpace(
+            cast<PointerType>(Arg.getType())->getAddressSpace());
+      }
+//      if (Arg.hasAttribute(Attribute::ZExt))
+//        Flags.setZExt();
+//      if (Arg.hasAttribute(Attribute::SExt))
+//        Flags.setSExt();
+//      if (Arg.hasAttribute(Attribute::InReg)) {
+//        // If we are using vectorcall calling convention, a structure that is
+//        // passed InReg - is surely an HVA
+//        if (E.getCallingConv() == CallingConv::X86_VectorCall &&
+//            isa<StructType>(Arg.getType())) {
+//          // The first value of a structure is marked
+//          if (0 == Value)
+//            Flags.setHvaStart();
+//          Flags.setHva();
+//        }
+//        // Set InReg Flag
+//        Flags.setInReg();
+//      }
+//      if (Arg.hasAttribute(Attribute::StructRet))
+//        Flags.setSRet();
+//      if (Arg.hasAttribute(Attribute::SwiftSelf))
+//        Flags.setSwiftSelf();
+//      if (Arg.hasAttribute(Attribute::SwiftError))
+//        Flags.setSwiftError();
+//      if (Arg.hasAttribute(Attribute::ByVal))
+//        Flags.setByVal();
+//      if (Arg.hasAttribute(Attribute::InAlloca)) {
+//        Flags.setInAlloca();`
+//        // Set the byval flag for CCAssignFn callbacks that don't know about
+//        // inalloca.  This way we can know how many bytes we should've allocated
+//        // and how many bytes a callee cleanup function will pop.  If we port
+//        // inalloca to more targets, we'll have to add custom inalloca handling
+//        // in the various CC lowering callbacks.
+//        Flags.setByVal();
+//      }
+      if (E.getCallingConv() == CallingConv::X86_INTR) {
+        // IA Interrupt passes frame (1st parameter) by value in the stack.
+        if (ArgNo == 0)
+          Flags.setByVal();
+      }
+      if (Flags.isByVal() || Flags.isInAlloca()) {
+        Type *ElementTy = Arg.getParamByValType();
+
+        // For ByVal, size and alignment should be passed from FE.  BE will
+        // guess if this info is not there but there are cases it cannot get
+        // right.
+        unsigned FrameSize = DL.getTypeAllocSize(Arg.getParamByValType());
+        Flags.setByValSize(FrameSize);
+
+        unsigned FrameAlign;
+        if (Arg.getParamAlignment())
+          FrameAlign = Arg.getParamAlignment();
+        else
+          FrameAlign = TLI->getByValTypeAlignment(ElementTy, DL);
+        Flags.setByValAlign(FrameAlign);
+      }
+//      if (Arg.hasAttribute(Attribute::Nest))
+//        Flags.setNest();
+      if (NeedsRegBlock)
+        Flags.setInConsecutiveRegs();
+      Flags.setOrigAlign(OriginalAlignment);
+      if (ArgCopyElisionCandidates.count(&Arg))
+        Flags.setCopyElisionCandidate();
+
+      MVT RegisterVT = TLI->getRegisterTypeForCallingConv(
+          *CurDAG->getContext(), E.getCallingConv(), VT);
+      unsigned NumRegs = TLI->getNumRegistersForCallingConv(
+          *CurDAG->getContext(), E.getCallingConv(), VT);
+      for (unsigned i = 0; i != NumRegs; ++i) {
+        ISD::InputArg MyFlags(Flags, RegisterVT, VT, isArgValueUsed,
+                              ArgNo, PartBase+i*RegisterVT.getStoreSize());
+        if (NumRegs > 1 && i == 0)
+          MyFlags.Flags.setSplit();
+        // if it isn't first piece, alignment must be 1
+        else if (i > 0) {
+          MyFlags.Flags.setOrigAlign(1);
+          if (i == NumRegs - 1)
+            MyFlags.Flags.setSplitEnd();
+        }
+        Ins.push_back(MyFlags);
+      }
+      if (NeedsRegBlock && Value == NumValues - 1)
+        Ins[Ins.size() - 1].Flags.setInConsecutiveRegsLast();
+      PartBase += VT.getStoreSize();
+    }
+  }
+
+  // Call the target to set up the argument values.
+  SmallVector<SDValue, 8> InVals;
+  SDValue NewRoot = TLI->LowerFormalArguments(
+      DAG.getRoot(), E.getCallingConv(), E.isVarArg(), Ins, dl, DAG, InVals);
+
+  // Verify that the target's LowerFormalArguments behaved as expected.
+  assert(NewRoot.getNode() && NewRoot.getValueType() == MVT::Other &&
+         "LowerFormalArguments didn't return a valid chain!");
+  assert(InVals.size() == Ins.size() &&
+         "LowerFormalArguments didn't emit the correct number of values!");
+  LLVM_DEBUG({
+    for (unsigned i = 0, e = Ins.size(); i != e; ++i) {
+      assert(InVals[i].getNode() &&
+             "LowerFormalArguments emitted a null value!");
+      assert(EVT(Ins[i].VT) == InVals[i].getValueType() &&
+             "LowerFormalArguments emitted a value with the wrong type!");
+    }
+  });
+
+  // Update the DAG with the new chain value resulting from argument lowering.
+  DAG.setRoot(NewRoot);
+
+  // Set up the argument values.
+  unsigned i = 0;
+  if (!FuncInfo->CanLowerReturn) {
+    // Create a virtual register for the sret pointer, and put in a copy
+    // from the sret argument into it.
+    SmallVector<EVT, 1> ValueVTs;
+    ComputeValueVTs(*TLI, DAG.getDataLayout(),
+                    E.getReturnType()->getPointerTo(
+                        DAG.getDataLayout().getAllocaAddrSpace()),
+                    ValueVTs);
+    MVT VT = ValueVTs[0].getSimpleVT();
+    MVT RegVT = TLI->getRegisterType(*CurDAG->getContext(), VT);
+    Optional<ISD::NodeType> AssertOp = None;
+    SDValue ArgValue = getCopyFromParts(DAG, dl, &InVals[0], 1, RegVT, VT,
+                                        nullptr, E.getCallingConv(), AssertOp);
+
+    MachineFunction& MF = SDB->DAG.getMachineFunction();
+    MachineRegisterInfo& RegInfo = MF.getRegInfo();
+    unsigned SRetReg = RegInfo.createVirtualRegister(TLI->getRegClassFor(RegVT));
+    FuncInfo->DemoteRegister = SRetReg;
+    NewRoot =
+        SDB->DAG.getCopyToReg(NewRoot, SDB->getCurSDLoc(), SRetReg, ArgValue);
+    DAG.setRoot(NewRoot);
+
+    // i indexes lowered arguments.  Bump it past the hidden sret argument.
+    ++i;
+  }
+
+  SmallVector<SDValue, 4> Chains;
+  DenseMap<int, int> ArgCopyElisionFrameIndexMap;
+  for (const Argument &Arg : E.args()) {
+    SmallVector<SDValue, 4> ArgValues;
+    SmallVector<EVT, 4> ValueVTs;
+    ComputeValueVTs(*TLI, DAG.getDataLayout(), Arg.getType(), ValueVTs);
+    unsigned NumValues = ValueVTs.size();
+    if (NumValues == 0)
+      continue;
+
+    bool ArgHasUses = !Arg.use_empty();
+
+    // Elide the copying store if the target loaded this argument from a
+    // suitable fixed stack object.
+    if (Ins[i].Flags.isCopyElisionCandidate()) {
+      tryToElideArgumentCopy(FuncInfo, Chains, ArgCopyElisionFrameIndexMap,
+                             ElidedArgCopyInstrs, ArgCopyElisionCandidates, Arg,
+                             InVals[i], ArgHasUses);
+    }
+
+    // If this argument is unused then remember its value. It is used to generate
+    // debugging information.
+    bool isSwiftErrorArg = false;
+//        TLI->supportSwiftError() &&
+//        Arg.hasAttribute(Attribute::SwiftError);
+    if (!ArgHasUses && !isSwiftErrorArg) {
+      SDB->setUnusedArgValue(&Arg, InVals[i]);
+
+      // Also remember any frame index for use in FastISel.
+      if (FrameIndexSDNode *FI =
+          dyn_cast<FrameIndexSDNode>(InVals[i].getNode()))
+        FuncInfo->setArgumentFrameIndex(&Arg, FI->getIndex());
+    }
+
+    for (unsigned Val = 0; Val != NumValues; ++Val) {
+      EVT VT = ValueVTs[Val];
+      MVT PartVT = TLI->getRegisterTypeForCallingConv(*CurDAG->getContext(),
+                                                      E.getCallingConv(), VT);
+      unsigned NumParts = TLI->getNumRegistersForCallingConv(
+          *CurDAG->getContext(), E.getCallingConv(), VT);
+
+      // Even an apparant 'unused' swifterror argument needs to be returned. So
+      // we do generate a copy for it that can be used on return from the
+      // function.
+      if (ArgHasUses || isSwiftErrorArg) {
+        Optional<ISD::NodeType> AssertOp = None;
+//        if (Arg.hasAttribute(Attribute::SExt))
+//          AssertOp = ISD::AssertSext;
+//        else if (Arg.hasAttribute(Attribute::ZExt))
+//          AssertOp = ISD::AssertZext;
+
+        ArgValues.push_back(getCopyFromParts(DAG, dl, &InVals[i], NumParts,
+                                             PartVT, VT, nullptr,
+                                             E.getCallingConv(), AssertOp));
       }
 
       i += NumParts;

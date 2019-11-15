@@ -8,6 +8,7 @@
 #include "llvm/ADT/Twine.h"
 #include "llvm/ADT/ilist_node.h"
 #include "llvm/IR/BasicBlock.h"
+#include "llvm/IR/MEFEntry.h"
 #include "llvm/IR/Value.h"
 #include "llvm/IR/SymbolTableListTraits.h"
 #include "llvm/Support/Casting.h"
@@ -17,6 +18,7 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <llvm/ADT/DenseSet.h>
 
 namespace llvm {
 
@@ -38,6 +40,7 @@ public:
 private:
     BasicBlockListType BasicBlocks;         ///< The basic blocks
     BasicBlock *PseudoEntryBlock;
+    DenseSet<MEFEntry *> Entries;
     friend class SymbolTableListTraits<MEFBody>;
 protected:
     Module *Parent;             // The containing module.
@@ -58,7 +61,10 @@ public:
 
     const BasicBlock       &getPseudoEntryBlock() const   { return *PseudoEntryBlock; }
     BasicBlock             &getPseudoEntryBlock()         { return *PseudoEntryBlock; }
-    void RegisterEntry(BasicBlock *entry);
+    DenseSet<MEFEntry *>   &getMEFEntries() {return Entries;}
+    void getEntryBlocks(DenseSet<BasicBlock *> &set) const;
+
+    void RegisterEntry(MEFEntry *entry);
 
     /// Returns the number of non-debug IR instructions in this function.
     /// This is equivalent to the sum of the sizes of each basic block contained

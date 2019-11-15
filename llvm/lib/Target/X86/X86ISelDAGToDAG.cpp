@@ -207,7 +207,7 @@ namespace {
 //      assert((!OptForMinSize || OptForSize) &&
 //             "OptForMinSize implies OptForSize");
 
-      SelectionDAGISel::runOnMachineFunction(MF);
+      SelectionDAGISel::runOnMachineFunctionMEF(MF);
       return true;
     }
 

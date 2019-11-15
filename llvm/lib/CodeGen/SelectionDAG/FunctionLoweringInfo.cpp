@@ -335,43 +335,43 @@ void FunctionLoweringInfo::set(const MEFBody &fn, MachineFunction &mf,
   DA = DAG->getDivergenceAnalysis();
 
   // Check whether the function can return without sret-demotion.
-  SmallVector<ISD::OutputArg, 4> Outs;
+//  SmallVector<ISD::OutputArg, 4> Outs;
 //  CallingConv::ID CC = FnBody->getCallingConv();
 
-  GetReturnInfo(CC, FnBody->getReturnType(), FnBody->getAttributes(), Outs, *TLI,
-                mf.getDataLayout());
-  CanLowerReturn =
-      TLI->CanLowerReturn(CC, *MF, FnBody->isVarArg(), Outs, FnBody->getContext());
+//  GetReturnInfo(CC, FnBody->getReturnType(), FnBody->getAttributes(), Outs, *TLI,
+//                mf.getDataLayout());
+//  CanLowerReturn =
+//      TLI->CanLowerReturn(CC, *MF, FnBody->isVarArg(), Outs, FnBody->getContext());
 
   // If this personality uses funclets, we need to do a bit more work.
   DenseMap<const AllocaInst *, TinyPtrVector<int *>> CatchObjects;
-  EHPersonality Personality = classifyEHPersonality(
-          /*FnBody->hasPersonalityFn() ? FnBody->getPersonalityFn() :*/ nullptr);
-  if (isFuncletEHPersonality(Personality)) {
-    // Calculate state numbers if we haven't already.
-    WinEHFuncInfo &EHInfo = *MF->getWinEHFuncInfo();
-    if (Personality == EHPersonality::MSVC_CXX)
-      calculateWinCXXEHStateNumbers(&fn, EHInfo);
-    else if (isAsynchronousEHPersonality(Personality))
-      calculateSEHStateNumbers(&fn, EHInfo);
-    else if (Personality == EHPersonality::CoreCLR)
-      calculateClrEHStateNumbers(&fn, EHInfo);
-
-    // Map all BB references in the WinEH data to MBBs.
-    for (WinEHTryBlockMapEntry &TBME : EHInfo.TryBlockMap) {
-      for (WinEHHandlerType &H : TBME.HandlerArray) {
-        if (const AllocaInst *AI = H.CatchObj.Alloca)
-          CatchObjects.insert({AI, {}}).first->second.push_back(
-              &H.CatchObj.FrameIndex);
-        else
-          H.CatchObj.FrameIndex = INT_MAX;
-      }
-    }
-  }
-  if (Personality == EHPersonality::Wasm_CXX) {
-    WasmEHFuncInfo &EHInfo = *MF->getWasmEHFuncInfo();
-    calculateWasmEHInfo(&fn, EHInfo);
-  }
+//  EHPersonality Personality = classifyEHPersonality(
+//          /*FnBody->hasPersonalityFn() ? FnBody->getPersonalityFn() :*/ nullptr);
+//  if (isFuncletEHPersonality(Personality)) {
+//    // Calculate state numbers if we haven't already.
+//    WinEHFuncInfo &EHInfo = *MF->getWinEHFuncInfo();
+//    if (Personality == EHPersonality::MSVC_CXX)
+//      calculateWinCXXEHStateNumbers(&fn, EHInfo);
+//    else if (isAsynchronousEHPersonality(Personality))
+//      calculateSEHStateNumbers(&fn, EHInfo);
+//    else if (Personality == EHPersonality::CoreCLR)
+//      calculateClrEHStateNumbers(&fn, EHInfo);
+//
+//    // Map all BB references in the WinEH data to MBBs.
+//    for (WinEHTryBlockMapEntry &TBME : EHInfo.TryBlockMap) {
+//      for (WinEHHandlerType &H : TBME.HandlerArray) {
+//        if (const AllocaInst *AI = H.CatchObj.Alloca)
+//          CatchObjects.insert({AI, {}}).first->second.push_back(
+//              &H.CatchObj.FrameIndex);
+//        else
+//          H.CatchObj.FrameIndex = INT_MAX;
+//      }
+//    }
+//  }
+//  if (Personality == EHPersonality::Wasm_CXX) {
+//    WasmEHFuncInfo &EHInfo = *MF->getWasmEHFuncInfo();
+//    calculateWasmEHInfo(&fn, EHInfo);
+//  }
 
   // Initialize the mapping of values to registers.  This is only set up for
   // instruction values that are used outside of the block that defines
@@ -454,10 +454,10 @@ void FunctionLoweringInfo::set(const MEFBody &fn, MachineFunction &mf,
 
       // If we have a musttail call in a variadic function, we need to ensure we
       // forward implicit register parameters.
-      if (const auto *CI = dyn_cast<CallInst>(&I)) {
-        if (CI->isMustTailCall() && FnBody->isVarArg())
-          MF->getFrameInfo().setHasMustTailInVarArgFunc(true);
-      }
+//      if (const auto *CI = dyn_cast<CallInst>(&I)) {
+//        if (CI->isMustTailCall() && FnBody->isVarArg())
+//          MF->getFrameInfo().setHasMustTailInVarArgFunc(true);
+//      }
 
       // Mark values used outside their block as exported, by allocating
       // a virtual register for them.
@@ -536,40 +536,40 @@ void FunctionLoweringInfo::set(const MEFBody &fn, MachineFunction &mf,
     }
   }
 
-  if (isFuncletEHPersonality(Personality)) {
-    WinEHFuncInfo &EHInfo = *MF->getWinEHFuncInfo();
-
-    // Map all BB references in the WinEH data to MBBs.
-    for (WinEHTryBlockMapEntry &TBME : EHInfo.TryBlockMap) {
-      for (WinEHHandlerType &H : TBME.HandlerArray) {
-        if (H.Handler)
-          H.Handler = MBBMap[H.Handler.get<const BasicBlock *>()];
-      }
-    }
-    for (CxxUnwindMapEntry &UME : EHInfo.CxxUnwindMap)
-      if (UME.Cleanup)
-        UME.Cleanup = MBBMap[UME.Cleanup.get<const BasicBlock *>()];
-    for (SEHUnwindMapEntry &UME : EHInfo.SEHUnwindMap) {
-      const auto *BB = UME.Handler.get<const BasicBlock *>();
-      UME.Handler = MBBMap[BB];
-    }
-    for (ClrEHUnwindMapEntry &CME : EHInfo.ClrEHUnwindMap) {
-      const auto *BB = CME.Handler.get<const BasicBlock *>();
-      CME.Handler = MBBMap[BB];
-    }
-  }
-
-  else if (Personality == EHPersonality::Wasm_CXX) {
-    WasmEHFuncInfo &EHInfo = *MF->getWasmEHFuncInfo();
-    // Map all BB references in the WinEH data to MBBs.
-    DenseMap<BBOrMBB, BBOrMBB> NewMap;
-    for (auto &KV : EHInfo.EHPadUnwindMap) {
-      const auto *Src = KV.first.get<const BasicBlock *>();
-      const auto *Dst = KV.second.get<const BasicBlock *>();
-      NewMap[MBBMap[Src]] = MBBMap[Dst];
-    }
-    EHInfo.EHPadUnwindMap = std::move(NewMap);
-  }
+//  if (isFuncletEHPersonality(Personality)) {
+//    WinEHFuncInfo &EHInfo = *MF->getWinEHFuncInfo();
+//
+//    // Map all BB references in the WinEH data to MBBs.
+//    for (WinEHTryBlockMapEntry &TBME : EHInfo.TryBlockMap) {
+//      for (WinEHHandlerType &H : TBME.HandlerArray) {
+//        if (H.Handler)
+//          H.Handler = MBBMap[H.Handler.get<const BasicBlock *>()];
+//      }
+//    }
+//    for (CxxUnwindMapEntry &UME : EHInfo.CxxUnwindMap)
+//      if (UME.Cleanup)
+//        UME.Cleanup = MBBMap[UME.Cleanup.get<const BasicBlock *>()];
+//    for (SEHUnwindMapEntry &UME : EHInfo.SEHUnwindMap) {
+//      const auto *BB = UME.Handler.get<const BasicBlock *>();
+//      UME.Handler = MBBMap[BB];
+//    }
+//    for (ClrEHUnwindMapEntry &CME : EHInfo.ClrEHUnwindMap) {
+//      const auto *BB = CME.Handler.get<const BasicBlock *>();
+//      CME.Handler = MBBMap[BB];
+//    }
+//  }
+//
+//  else if (Personality == EHPersonality::Wasm_CXX) {
+//    WasmEHFuncInfo &EHInfo = *MF->getWasmEHFuncInfo();
+//    // Map all BB references in the WinEH data to MBBs.
+//    DenseMap<BBOrMBB, BBOrMBB> NewMap;
+//    for (auto &KV : EHInfo.EHPadUnwindMap) {
+//      const auto *Src = KV.first.get<const BasicBlock *>();
+//      const auto *Dst = KV.second.get<const BasicBlock *>();
+//      NewMap[MBBMap[Src]] = MBBMap[Dst];
+//    }
+//    EHInfo.EHPadUnwindMap = std::move(NewMap);
+//  }
 }
 
 /// clear - Clear out all the function-specific state. This returns this

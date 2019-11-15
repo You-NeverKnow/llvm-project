@@ -398,6 +398,9 @@ public:
   void init(MachineFunction &NewMF, OptimizationRemarkEmitter &NewORE,
             Pass *PassPtr, const TargetLibraryInfo *LibraryInfo,
             LegacyDivergenceAnalysis * Divergence);
+  void initMEF(MachineFunction &NewMF, OptimizationRemarkEmitter &NewORE,
+            Pass *PassPtr, const TargetLibraryInfo *LibraryInfo,
+            LegacyDivergenceAnalysis * Divergence);
 
   void setFunctionLoweringInfo(FunctionLoweringInfo * FuncInfo) {
     FLI = FuncInfo;

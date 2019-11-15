@@ -1,6 +1,7 @@
 
 #include <llvm/IR/MEFBody.h>
 #include <llvm/IR/IRBuilder.h>
+#include <iostream>
 #include "llvm/IR/Module.h"
 
 using namespace llvm;
@@ -21,16 +22,26 @@ unsigned MEFBody::getInstructionCount() const {
     return NumInstrs;
 }
 
-void MEFBody::RegisterEntry(llvm::BasicBlock *entry) {
-    auto value = ConstantInt::get(Type::getInt32Ty(entry->getContext()), 0);
+void MEFBody::getEntryBlocks(llvm::DenseSet<llvm::BasicBlock *> &set) const {
+    for (auto entry: Entries) set.insert(&entry->getEntryBlock());
+}
+
+void MEFBody::RegisterEntry(MEFEntry *entry) {
+    auto value = ConstantInt::get(Type::getInt32Ty(getContext()), 0);
     if (PseudoEntryBlock->getTerminator()) {
         auto *sw = (SwitchInst*) PseudoEntryBlock->getTerminator();
-        sw->addCase(value, entry);
+        sw->addCase(value, &entry->getEntryBlock());
     } else {
         auto builder = IRBuilder<>(PseudoEntryBlock);
-        builder.CreateSwitch(value, entry);
+        builder.CreateSwitch(value, &entry->getEntryBlock());
     }
+    Entries.insert(entry);
+    // Debug -- iterable
+//    std::cout << "Entries: " << Entries.size() << "= ";
+//    for(auto& var: Entries) std::cout << var << " "; std::cout << '\n';
+
 }
+
 
 LLVMContext &MEFBody::getContext() const {
     return getType()->getContext();

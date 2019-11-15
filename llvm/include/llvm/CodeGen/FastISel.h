@@ -257,6 +257,7 @@ public:
   /// the machine instructions to the current block. Returns true when
   /// successful.
   bool lowerArguments();
+  bool lowerArgumentsMEF();
 
   /// Do "fast" instruction selection for the given LLVM IR instruction
   /// and append the generated machine instructions to the current block.

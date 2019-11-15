@@ -39,6 +39,10 @@ MEFEntry::MEFEntry(FunctionType *Ty, const Twine &name, Module *ParentModule)
 //    setName(Name);
 //}
 
+void MEFEntry::Register(BasicBlock *block) {
+    entryBlock = block;
+    entryBlock->getParentMEF()->RegisterEntry(this);
+}
 void MEFEntry::BuildArguments() const {
     // Create the arguments vector, all arguments start out unnamed.
     auto *FT = getFunctionType();

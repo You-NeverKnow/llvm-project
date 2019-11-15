@@ -20,6 +20,7 @@
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Type.h"
 #include <algorithm>
+#include <iostream>
 
 using namespace llvm;
 
@@ -163,8 +164,12 @@ const Module *BasicBlock::getModule() const {
 }
 
 const Instruction *BasicBlock::getTerminator() const {
-  if (InstList.empty() || !InstList.back().isTerminator())
+  if (InstList.empty() || !InstList.back().isTerminator()) {
+    // debug
+    std::cout << "No terminator" << '\n';
+
     return nullptr;
+  }
   return &InstList.back();
 }
 

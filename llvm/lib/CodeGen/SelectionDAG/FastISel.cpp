@@ -162,6 +162,26 @@ bool FastISel::lowerArguments() {
   }
   return true;
 }
+bool FastISel::lowerArgumentsMEF() {
+//  if (!FuncInfo.CanLowerReturn)
+//    // Fallback to SDISel argument lowering code to deal with sret pointer
+//    // parameter.
+//    return false;
+//
+//  if (!fastLowerArguments())
+//    return false;
+//
+//  // Enter arguments into ValueMap for uses in non-entry BBs.
+//  for (Function::const_arg_iterator I = FuncInfo.FnBody->arg_begin(),
+//                                    E = FuncInfo.FnBody->arg_end();
+//       I != E; ++I) {
+//    DenseMap<const Value *, unsigned>::iterator VI = LocalValueMap.find(&*I);
+//    assert(VI != LocalValueMap.end() && "Missed an argument?");
+//    FuncInfo.ValueMap[&*I] = VI->second;
+//  }
+//  return true;
+    return false;
+}
 
 /// Return the defined register if this instruction defines exactly one
 /// virtual register and uses no other virtual registers. Otherwise return 0.

@@ -326,7 +326,8 @@ void MachineFunction::clear() {
 }
 
 const DataLayout &MachineFunction::getDataLayout() const {
-  return (*F).getParent()->getDataLayout();
+    if (B) return B->getParent()->getDataLayout();
+  return F->getParent()->getDataLayout();
 }
 
 /// Get the JumpTableInfo for this function.
@@ -547,8 +548,7 @@ LLVM_DUMP_METHOD void MachineFunction::dump() const {
 #endif
 
 StringRef MachineFunction::getName() const {
-    if (B)
-        return B->getName();
+    if (B) return B->getName();
   return getFunction().getName();
 }
 
