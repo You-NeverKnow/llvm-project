@@ -4892,6 +4892,182 @@ MachineInstr *X86InstrInfo::foldMemoryOperandImpl(
   return nullptr;
 }
 
+MachineInstr *X86InstrInfo::foldMemoryOperandImplMEF(
+    MachineFunction &MF, MachineInstr &MI, unsigned OpNum,
+    ArrayRef<MachineOperand> MOs, MachineBasicBlock::iterator InsertPt,
+    unsigned Size, unsigned Align, bool AllowCommute) const {
+  bool isSlowTwoMemOps = Subtarget.slowTwoMemOps();
+  bool isTwoAddrFold = false;
+
+  // For CPUs that favor the register form of a call or push,
+  // do not fold loads into calls or pushes, unless optimizing for size
+  // aggressively. :TODO :: MEF does not havbe MinSize
+  if (isSlowTwoMemOps && /*!MF.getFunction().hasMinSize() &&*/
+      (MI.getOpcode() == X86::CALL32r || MI.getOpcode() == X86::CALL64r ||
+       MI.getOpcode() == X86::PUSH16r || MI.getOpcode() == X86::PUSH32r ||
+       MI.getOpcode() == X86::PUSH64r))
+    return nullptr;
+
+  // Avoid partial and undef register update stalls unless optimizing for size.
+  if (/*!MF.getFunction().hasOptSize()  && */
+      (hasPartialRegUpdate(MI.getOpcode(), Subtarget, /*ForLoadFold*/true) ||
+       shouldPreventUndefRegUpdateMemFold(MF, MI)))
+    return nullptr;
+
+  unsigned NumOps = MI.getDesc().getNumOperands();
+  bool isTwoAddr =
+      NumOps > 1 && MI.getDesc().getOperandConstraint(1, MCOI::TIED_TO) != -1;
+
+  // FIXME: AsmPrinter doesn't know how to handle
+  // X86II::MO_GOT_ABSOLUTE_ADDRESS after folding.
+  if (MI.getOpcode() == X86::ADD32ri &&
+      MI.getOperand(2).getTargetFlags() == X86II::MO_GOT_ABSOLUTE_ADDRESS)
+    return nullptr;
+
+  // GOTTPOFF relocation loads can only be folded into add instructions.
+  // FIXME: Need to exclude other relocations that only support specific
+  // instructions.
+  if (MOs.size() == X86::AddrNumOperands &&
+      MOs[X86::AddrDisp].getTargetFlags() == X86II::MO_GOTTPOFF &&
+      MI.getOpcode() != X86::ADD64rr)
+    return nullptr;
+
+  MachineInstr *NewMI = nullptr;
+
+  // Attempt to fold any custom cases we have.
+  if (MachineInstr *CustomMI =
+          foldMemoryOperandCustom(MF, MI, OpNum, MOs, InsertPt, Size, Align))
+    return CustomMI;
+
+  const X86MemoryFoldTableEntry *I = nullptr;
+
+  // Folding a memory location into the two-address part of a two-address
+  // instruction is different than folding it other places.  It requires
+  // replacing the *two* registers with the memory location.
+  if (isTwoAddr && NumOps >= 2 && OpNum < 2 && MI.getOperand(0).isReg() &&
+      MI.getOperand(1).isReg() &&
+      MI.getOperand(0).getReg() == MI.getOperand(1).getReg()) {
+    I = lookupTwoAddrFoldTable(MI.getOpcode());
+    isTwoAddrFold = true;
+  } else {
+    if (OpNum == 0) {
+      if (MI.getOpcode() == X86::MOV32r0) {
+        NewMI = MakeM0Inst(*this, X86::MOV32mi, MOs, InsertPt, MI);
+        if (NewMI)
+          return NewMI;
+      }
+    }
+
+    I = lookupFoldTable(MI.getOpcode(), OpNum);
+  }
+
+  if (I != nullptr) {
+    unsigned Opcode = I->DstOp;
+    unsigned MinAlign = (I->Flags & TB_ALIGN_MASK) >> TB_ALIGN_SHIFT;
+    if (Align < MinAlign)
+      return nullptr;
+    bool NarrowToMOV32rm = false;
+    if (Size) {
+      const TargetRegisterInfo &TRI = *MF.getSubtarget().getRegisterInfo();
+      const TargetRegisterClass *RC = getRegClass(MI.getDesc(), OpNum,
+                                                  &RI, MF);
+      unsigned RCSize = TRI.getRegSizeInBits(*RC) / 8;
+      if (Size < RCSize) {
+        // FIXME: Allow scalar intrinsic instructions like ADDSSrm_Int.
+        // Check if it's safe to fold the load. If the size of the object is
+        // narrower than the load width, then it's not.
+        if (Opcode != X86::MOV64rm || RCSize != 8 || Size != 4)
+          return nullptr;
+        // If this is a 64-bit load, but the spill slot is 32, then we can do
+        // a 32-bit load which is implicitly zero-extended. This likely is
+        // due to live interval analysis remat'ing a load from stack slot.
+        if (MI.getOperand(0).getSubReg() || MI.getOperand(1).getSubReg())
+          return nullptr;
+        Opcode = X86::MOV32rm;
+        NarrowToMOV32rm = true;
+      }
+    }
+
+    if (isTwoAddrFold)
+      NewMI = FuseTwoAddrInst(MF, Opcode, MOs, InsertPt, MI, *this);
+    else
+      NewMI = FuseInst(MF, Opcode, OpNum, MOs, InsertPt, MI, *this);
+
+    if (NarrowToMOV32rm) {
+      // If this is the special case where we use a MOV32rm to load a 32-bit
+      // value and zero-extend the top bits. Change the destination register
+      // to a 32-bit one.
+      unsigned DstReg = NewMI->getOperand(0).getReg();
+      if (TargetRegisterInfo::isPhysicalRegister(DstReg))
+        NewMI->getOperand(0).setReg(RI.getSubReg(DstReg, X86::sub_32bit));
+      else
+        NewMI->getOperand(0).setSubReg(X86::sub_32bit);
+    }
+    return NewMI;
+  }
+
+  // If the instruction and target operand are commutable, commute the
+  // instruction and try again.
+  if (AllowCommute) {
+    unsigned CommuteOpIdx1 = OpNum, CommuteOpIdx2 = CommuteAnyOperandIndex;
+    if (findCommutedOpIndices(MI, CommuteOpIdx1, CommuteOpIdx2)) {
+      bool HasDef = MI.getDesc().getNumDefs();
+      Register Reg0 = HasDef ? MI.getOperand(0).getReg() : Register();
+      Register Reg1 = MI.getOperand(CommuteOpIdx1).getReg();
+      Register Reg2 = MI.getOperand(CommuteOpIdx2).getReg();
+      bool Tied1 =
+          0 == MI.getDesc().getOperandConstraint(CommuteOpIdx1, MCOI::TIED_TO);
+      bool Tied2 =
+          0 == MI.getDesc().getOperandConstraint(CommuteOpIdx2, MCOI::TIED_TO);
+
+      // If either of the commutable operands are tied to the destination
+      // then we can not commute + fold.
+      if ((HasDef && Reg0 == Reg1 && Tied1) ||
+          (HasDef && Reg0 == Reg2 && Tied2))
+        return nullptr;
+
+      MachineInstr *CommutedMI =
+          commuteInstruction(MI, false, CommuteOpIdx1, CommuteOpIdx2);
+      if (!CommutedMI) {
+        // Unable to commute.
+        return nullptr;
+      }
+      if (CommutedMI != &MI) {
+        // New instruction. We can't fold from this.
+        CommutedMI->eraseFromParent();
+        return nullptr;
+      }
+
+      // Attempt to fold with the commuted version of the instruction.
+      NewMI = foldMemoryOperandImpl(MF, MI, CommuteOpIdx2, MOs, InsertPt,
+                                    Size, Align, /*AllowCommute=*/false);
+      if (NewMI)
+        return NewMI;
+
+      // Folding failed again - undo the commute before returning.
+      MachineInstr *UncommutedMI =
+          commuteInstruction(MI, false, CommuteOpIdx1, CommuteOpIdx2);
+      if (!UncommutedMI) {
+        // Unable to commute.
+        return nullptr;
+      }
+      if (UncommutedMI != &MI) {
+        // New instruction. It doesn't need to be kept.
+        UncommutedMI->eraseFromParent();
+        return nullptr;
+      }
+
+      // Return here to prevent duplicate fuse failure report.
+      return nullptr;
+    }
+  }
+
+  // No fusion
+  if (PrintFailedFusing && !MI.isCopy())
+    dbgs() << "We failed to fuse operand " << OpNum << " in " << MI;
+  return nullptr;
+}
+
 MachineInstr *
 X86InstrInfo::foldMemoryOperandImpl(MachineFunction &MF, MachineInstr &MI,
                                     ArrayRef<unsigned> Ops,

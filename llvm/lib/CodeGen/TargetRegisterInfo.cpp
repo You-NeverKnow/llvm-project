@@ -454,6 +454,23 @@ bool TargetRegisterInfo::needsStackRealignment(
   return false;
 }
 
+bool TargetRegisterInfo::needsStackRealignmentMEF(
+    const MachineFunction &MF) const {
+  const MachineFrameInfo &MFI = MF.getFrameInfo();
+  const TargetFrameLowering *TFI = MF.getSubtarget().getFrameLowering();
+//  const Function &F = MF.getFunction();
+  unsigned StackAlign = TFI->getStackAlignment();
+  bool requiresRealignment = ((MFI.getMaxAlignment() > StackAlign) /*||
+                              F.hasFnAttribute(Attribute::StackAlignment)*/);
+  if (/*F.hasFnAttribute("stackrealign") || */requiresRealignment) {
+    if (canRealignStack(MF))
+      return true;
+//    LLVM_DEBUG(dbgs() << "Can't realign function's stack: " << F.getName()
+//                      << "\n");
+  }
+  return false;
+}
+
 bool TargetRegisterInfo::regmaskSubsetEqual(const uint32_t *mask0,
                                             const uint32_t *mask1) const {
   unsigned N = (getNumRegs()+31) / 32;

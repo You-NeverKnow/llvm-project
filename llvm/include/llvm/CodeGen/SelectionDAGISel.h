@@ -77,6 +77,7 @@ public:
   bool runOnMachineFunctionMEF(MachineFunction &MF) override;
 
   virtual void EmitFunctionEntryCode() {}
+  virtual void EmitFunctionEntryCodeMEF() {}
 
   /// PreprocessISelDAG - This hook allows targets to hack on the graph before
   /// instruction selection starts.
@@ -335,9 +336,14 @@ private:
   void SelectBasicBlock(BasicBlock::const_iterator Begin,
                         BasicBlock::const_iterator End,
                         bool &HadTailCall);
+  void SelectBasicBlockMEF(BasicBlock::const_iterator Begin,
+                        BasicBlock::const_iterator End,
+                        bool &HadTailCall);
   void FinishBasicBlock();
+  void FinishBasicBlockMEF();
 
   void CodeGenAndEmitDAG();
+  void CodeGenAndEmitDAGMEF();
 
   /// Generate instructions for lowering the incoming arguments of the
   /// given function.

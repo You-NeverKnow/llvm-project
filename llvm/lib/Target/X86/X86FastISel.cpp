@@ -73,6 +73,8 @@ public:
   /// possible.
   bool tryToFoldLoadIntoMI(MachineInstr *MI, unsigned OpNo,
                            const LoadInst *LI) override;
+  bool tryToFoldLoadIntoMIMEF(MachineInstr *MI, unsigned OpNo,
+                           const LoadInst *LI) override;
 
   bool fastLowerArguments() override;
   bool fastLowerCall(CallLoweringInfo &CLI) override;
@@ -3934,6 +3936,55 @@ bool X86FastISel::tryToFoldLoadIntoMI(MachineInstr *MI, unsigned OpNo,
   AM.getFullAddress(AddrOps);
 
   MachineInstr *Result = XII.foldMemoryOperandImpl(
+      *FuncInfo.MF, *MI, OpNo, AddrOps, FuncInfo.InsertPt, Size, Alignment,
+      /*AllowCommute=*/true);
+  if (!Result)
+    return false;
+
+  // The index register could be in the wrong register class.  Unfortunately,
+  // foldMemoryOperandImpl could have commuted the instruction so its not enough
+  // to just look at OpNo + the offset to the index reg.  We actually need to
+  // scan the instruction to find the index reg and see if its the correct reg
+  // class.
+  unsigned OperandNo = 0;
+  for (MachineInstr::mop_iterator I = Result->operands_begin(),
+       E = Result->operands_end(); I != E; ++I, ++OperandNo) {
+    MachineOperand &MO = *I;
+    if (!MO.isReg() || MO.isDef() || MO.getReg() != AM.IndexReg)
+      continue;
+    // Found the index reg, now try to rewrite it.
+    unsigned IndexReg = constrainOperandRegClass(Result->getDesc(),
+                                                 MO.getReg(), OperandNo);
+    if (IndexReg == MO.getReg())
+      continue;
+    MO.setReg(IndexReg);
+  }
+
+  Result->addMemOperand(*FuncInfo.MF, createMachineMemOperandFor(LI));
+  Result->cloneInstrSymbols(*FuncInfo.MF, *MI);
+  MachineBasicBlock::iterator I(MI);
+  removeDeadCode(I, std::next(I));
+  return true;
+}
+bool X86FastISel::tryToFoldLoadIntoMIMEF(MachineInstr *MI, unsigned OpNo,
+                                      const LoadInst *LI) {
+  const Value *Ptr = LI->getPointerOperand();
+  X86AddressMode AM;
+  if (!X86SelectAddress(Ptr, AM))
+    return false;
+
+  const X86InstrInfo &XII = (const X86InstrInfo &)TII;
+
+  unsigned Size = DL.getTypeAllocSize(LI->getType());
+  unsigned Alignment = LI->getAlignment();
+
+  if (Alignment == 0)  // Ensure that codegen never sees alignment 0
+    Alignment = DL.getABITypeAlignment(LI->getType());
+
+  SmallVector<MachineOperand, 8> AddrOps;
+  AM.getFullAddress(AddrOps);
+
+  MachineInstr *Result = XII.foldMemoryOperandImplMEF(
       *FuncInfo.MF, *MI, OpNo, AddrOps, FuncInfo.InsertPt, Size, Alignment,
       /*AllowCommute=*/true);
   if (!Result)

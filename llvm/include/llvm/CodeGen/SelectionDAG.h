@@ -500,6 +500,8 @@ public:
   /// types that are illegal on the target.
   void Combine(CombineLevel Level, AliasAnalysis *AA,
                CodeGenOpt::Level OptLevel);
+  void CombineMEF(CombineLevel Level, AliasAnalysis *AA,
+               CodeGenOpt::Level OptLevel);
 
   /// This transforms the SelectionDAG into a SelectionDAG that
   /// only uses types natively supported by the target.

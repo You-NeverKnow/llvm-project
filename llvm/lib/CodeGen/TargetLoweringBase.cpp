@@ -1960,3 +1960,7 @@ int TargetLoweringBase::getDivRefinementSteps(EVT VT,
 void TargetLoweringBase::finalizeLowering(MachineFunction &MF) const {
   MF.getRegInfo().freezeReservedRegs(MF);
 }
+
+void TargetLoweringBase::finalizeLoweringMEF(MachineFunction &MF) const {
+  MF.getRegInfo().freezeReservedRegsMEF(MF);
+}

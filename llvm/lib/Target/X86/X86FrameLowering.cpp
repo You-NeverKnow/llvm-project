@@ -91,6 +91,17 @@ bool X86FrameLowering::hasFP(const MachineFunction &MF) const {
           MFI.hasStackMap() || MFI.hasPatchPoint() ||
           MFI.hasCopyImplyingStackAdjustment());
 }
+bool X86FrameLowering::hasFPMEF(const MachineFunction &MF) const {
+  const MachineFrameInfo &MFI = MF.getFrameInfo();
+  return (MF.getTarget().Options.DisableFramePointerElimMEF(MF) ||
+          TRI->needsStackRealignmentMEF(MF) ||
+          MFI.hasVarSizedObjects() ||
+          MFI.isFrameAddressTaken() || MFI.hasOpaqueSPAdjustment() ||
+          MF.getInfo<X86MachineFunctionInfo>()->getForceFramePointer() ||
+          MF.callsUnwindInit() || MF.hasEHFunclets() || MF.callsEHReturn() ||
+          MFI.hasStackMap() || MFI.hasPatchPoint() ||
+          MFI.hasCopyImplyingStackAdjustment());
+}
 
 static unsigned getSUBriOpcode(unsigned IsLP64, int64_t Imm) {
   if (IsLP64) {

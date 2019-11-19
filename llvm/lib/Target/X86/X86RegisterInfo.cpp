@@ -597,6 +597,95 @@ BitVector X86RegisterInfo::getReservedRegs(const MachineFunction &MF) const {
                                   X86::SIH, X86::DIH, X86::BPH, X86::SPH}));
   return Reserved;
 }
+BitVector X86RegisterInfo::getReservedRegsMEF(const MachineFunction &MF) const {
+  BitVector Reserved(getNumRegs());
+  const X86FrameLowering *TFI = getFrameLowering(MF);
+
+  // Set the floating point control register as reserved.
+  Reserved.set(X86::FPCW);
+
+  // Set the stack-pointer register and its aliases as reserved.
+  for (MCSubRegIterator I(X86::RSP, this, /*IncludeSelf=*/true); I.isValid();
+       ++I)
+    Reserved.set(*I);
+
+  // Set the Shadow Stack Pointer as reserved.
+  Reserved.set(X86::SSP);
+
+  // Set the instruction pointer register and its aliases as reserved.
+  for (MCSubRegIterator I(X86::RIP, this, /*IncludeSelf=*/true); I.isValid();
+       ++I)
+    Reserved.set(*I);
+
+  // Set the frame-pointer register and its aliases as reserved if needed.
+  if (TFI->hasFPMEF(MF)) {
+    for (MCSubRegIterator I(X86::RBP, this, /*IncludeSelf=*/true); I.isValid();
+         ++I)
+      Reserved.set(*I);
+  }
+
+  // Set the base-pointer register and its aliases as reserved if needed.
+  if (hasBasePointerMEF(MF)) {
+    CallingConv::ID CC = /*MF.getFunction().getCallingConv()*/ CallingConv::C;
+    const uint32_t *RegMask = getCallPreservedMask(MF, CC);
+    if (MachineOperand::clobbersPhysReg(RegMask, getBaseRegister()))
+      report_fatal_error(
+        "Stack realignment in presence of dynamic allocas is not supported with"
+        "this calling convention.");
+
+    unsigned BasePtr = getX86SubSuperRegister(getBaseRegister(), 64);
+    for (MCSubRegIterator I(BasePtr, this, /*IncludeSelf=*/true);
+         I.isValid(); ++I)
+      Reserved.set(*I);
+  }
+
+  // Mark the segment registers as reserved.
+  Reserved.set(X86::CS);
+  Reserved.set(X86::SS);
+  Reserved.set(X86::DS);
+  Reserved.set(X86::ES);
+  Reserved.set(X86::FS);
+  Reserved.set(X86::GS);
+
+  // Mark the floating point stack registers as reserved.
+  for (unsigned n = 0; n != 8; ++n)
+    Reserved.set(X86::ST0 + n);
+
+  // Reserve the registers that only exist in 64-bit mode.
+  if (!Is64Bit) {
+    // These 8-bit registers are part of the x86-64 extension even though their
+    // super-registers are old 32-bits.
+    Reserved.set(X86::SIL);
+    Reserved.set(X86::DIL);
+    Reserved.set(X86::BPL);
+    Reserved.set(X86::SPL);
+    Reserved.set(X86::SIH);
+    Reserved.set(X86::DIH);
+    Reserved.set(X86::BPH);
+    Reserved.set(X86::SPH);
+
+    for (unsigned n = 0; n != 8; ++n) {
+      // R8, R9, ...
+      for (MCRegAliasIterator AI(X86::R8 + n, this, true); AI.isValid(); ++AI)
+        Reserved.set(*AI);
+
+      // XMM8, XMM9, ...
+      for (MCRegAliasIterator AI(X86::XMM8 + n, this, true); AI.isValid(); ++AI)
+        Reserved.set(*AI);
+    }
+  }
+  if (!Is64Bit || !MF.getSubtarget<X86Subtarget>().hasAVX512()) {
+    for (unsigned n = 16; n != 32; ++n) {
+      for (MCRegAliasIterator AI(X86::XMM0 + n, this, true); AI.isValid(); ++AI)
+        Reserved.set(*AI);
+    }
+  }
+
+  assert(checkAllSuperRegsMarked(Reserved,
+                                 {X86::SIL, X86::DIL, X86::BPL, X86::SPL,
+                                  X86::SIH, X86::DIH, X86::BPH, X86::SPH}));
+  return Reserved;
+}
 
 void X86RegisterInfo::adjustStackMapLiveOutMask(uint32_t *Mask) const {
   // Check if the EFLAGS register is marked as live-out. This shouldn't happen,
@@ -634,6 +723,20 @@ bool X86RegisterInfo::hasBasePointer(const MachineFunction &MF) const {
    // reference locals while also adjusting the stack pointer.  When we can't
    // use both the SP and the FP, we need a separate base pointer register.
    bool CantUseFP = needsStackRealignment(MF);
+   return CantUseFP && CantUseSP(MFI);
+}
+bool X86RegisterInfo::hasBasePointerMEF(const MachineFunction &MF) const {
+   const MachineFrameInfo &MFI = MF.getFrameInfo();
+
+   if (!EnableBasePointer)
+     return false;
+
+   // When we need stack realignment, we can't address the stack from the frame
+   // pointer.  When we have dynamic allocas or stack-adjusting inline asm, we
+   // can't address variables from the stack pointer.  MS inline asm can
+   // reference locals while also adjusting the stack pointer.  When we can't
+   // use both the SP and the FP, we need a separate base pointer register.
+   bool CantUseFP = needsStackRealignmentMEF(MF);
    return CantUseFP && CantUseSP(MFI);
 }
 

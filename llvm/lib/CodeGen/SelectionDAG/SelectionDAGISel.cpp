@@ -1030,14 +1030,14 @@ bool SelectionDAGISel::runOnMachineFunctionMEF(MachineFunction &mf) {
     MRI.replaceRegWith(From, To);
   }
 
-  TLI->finalizeLowering(*MF);
+  TLI->finalizeLoweringMEF(*MF);
 
   // Release function-specific state. SDB and CurDAG are already cleared
   // at this point.
   FuncInfo->clear();
 
-  LLVM_DEBUG(dbgs() << "*** MachineFunction at end of ISel ***\n");
-  LLVM_DEBUG(MF->print(dbgs()));
+//  LLVM_DEBUG(dbgs() << "*** MachineFunction at end of ISel ***\n");
+//  LLVM_DEBUG(MF->print(dbgs()));
 
   return true;
 }
@@ -1078,6 +1078,28 @@ void SelectionDAGISel::SelectBasicBlock(BasicBlock::const_iterator Begin,
 
   // Final step, emit the lowered DAG as machine code.
   CodeGenAndEmitDAG();
+}
+void SelectionDAGISel::SelectBasicBlockMEF(BasicBlock::const_iterator Begin,
+                                        BasicBlock::const_iterator End,
+                                        bool &HadTailCall) {
+  // Allow creating illegal types during DAG building for the basic block.
+  CurDAG->NewNodesMustHaveLegalTypes = false;
+
+  // Lower the instructions. If a call is emitted as a tail call, cease emitting
+  // nodes for this block.
+  for (BasicBlock::const_iterator I = Begin; I != End && !SDB->HasTailCall; ++I) {
+    if (!ElidedArgCopyInstrs.count(&*I))
+      SDB->visit(*I);
+  }
+
+  // Make sure the root of the DAG is up-to-date.
+  CurDAG->setRoot(SDB->getControlRoot());
+  HadTailCall = SDB->HasTailCall;
+  SDB->resolveOrClearDbgInfo();
+  SDB->clear();
+
+  // Final step, emit the lowered DAG as machine code.
+  CodeGenAndEmitDAGMEF();
 }
 
 void SelectionDAGISel::ComputeLiveOutVRegInfo() {
@@ -1290,6 +1312,248 @@ void SelectionDAGISel::CodeGenAndEmitDAG() {
     NamedRegionTimer T("combine2", "DAG Combining 2", GroupName,
                        GroupDescription, TimePassesIsEnabled);
     CurDAG->Combine(AfterLegalizeDAG, AA, OptLevel);
+  }
+
+#ifndef NDEBUG
+  if (TTI.hasBranchDivergence())
+    CurDAG->VerifyDAGDiverence();
+#endif
+
+  LLVM_DEBUG(dbgs() << "Optimized legalized selection DAG: "
+                    << printMBBReference(*FuncInfo->MBB) << " '" << BlockName
+                    << "'\n";
+             CurDAG->dump());
+
+  if (OptLevel != CodeGenOpt::None)
+    ComputeLiveOutVRegInfo();
+
+  if (ViewISelDAGs && MatchFilterBB)
+    CurDAG->viewGraph("isel input for " + BlockName);
+
+  // Third, instruction select all of the operations to machine code, adding the
+  // code to the MachineBasicBlock.
+  {
+    NamedRegionTimer T("isel", "Instruction Selection", GroupName,
+                       GroupDescription, TimePassesIsEnabled);
+    DoInstructionSelection();
+  }
+
+  LLVM_DEBUG(dbgs() << "Selected selection DAG: "
+                    << printMBBReference(*FuncInfo->MBB) << " '" << BlockName
+                    << "'\n";
+             CurDAG->dump());
+
+  if (ViewSchedDAGs && MatchFilterBB)
+    CurDAG->viewGraph("scheduler input for " + BlockName);
+
+  // Schedule machine code.
+  ScheduleDAGSDNodes *Scheduler = CreateScheduler();
+  {
+    NamedRegionTimer T("sched", "Instruction Scheduling", GroupName,
+                       GroupDescription, TimePassesIsEnabled);
+    Scheduler->Run(CurDAG, FuncInfo->MBB);
+  }
+
+  if (ViewSUnitDAGs && MatchFilterBB)
+    Scheduler->viewGraph();
+
+  // Emit machine code to BB.  This can change 'BB' to the last block being
+  // inserted into.
+  MachineBasicBlock *FirstMBB = FuncInfo->MBB, *LastMBB;
+  {
+    NamedRegionTimer T("emit", "Instruction Creation", GroupName,
+                       GroupDescription, TimePassesIsEnabled);
+
+    // FuncInfo->InsertPt is passed by reference and set to the end of the
+    // scheduled instructions.
+    LastMBB = FuncInfo->MBB = Scheduler->EmitSchedule(FuncInfo->InsertPt);
+  }
+
+  // If the block was split, make sure we update any references that are used to
+  // update PHI nodes later on.
+  if (FirstMBB != LastMBB)
+    SDB->UpdateSplitBlock(FirstMBB, LastMBB);
+
+  // Free the scheduler state.
+  {
+    NamedRegionTimer T("cleanup", "Instruction Scheduling Cleanup", GroupName,
+                       GroupDescription, TimePassesIsEnabled);
+    delete Scheduler;
+  }
+
+  // Free the SelectionDAG state, now that we're finished with it.
+  CurDAG->clear();
+}
+void SelectionDAGISel::CodeGenAndEmitDAGMEF() {
+  StringRef GroupName = "sdag";
+  StringRef GroupDescription = "Instruction Selection and Scheduling";
+  std::string BlockName;
+  bool MatchFilterBB = false; (void)MatchFilterBB;
+#ifndef NDEBUG
+  TargetTransformInfo &TTI =
+      getAnalysis<TargetTransformInfoWrapperPass>().getTTI(*FuncInfo->Fn);
+#endif
+
+  // Pre-type legalization allow creation of any node types.
+  CurDAG->NewNodesMustHaveLegalTypes = false;
+
+#ifndef NDEBUG
+  MatchFilterBB = (FilterDAGBasicBlockName.empty() ||
+                   FilterDAGBasicBlockName ==
+                       FuncInfo->MBB->getBasicBlock()->getName());
+#endif
+#ifdef NDEBUG
+  if (ViewDAGCombine1 || ViewLegalizeTypesDAGs || ViewLegalizeDAGs ||
+      ViewDAGCombine2 || ViewDAGCombineLT || ViewISelDAGs || ViewSchedDAGs ||
+      ViewSUnitDAGs)
+#endif
+  {
+    BlockName =
+        (MF->getName() + ":" + FuncInfo->MBB->getBasicBlock()->getName()).str();
+  }
+  LLVM_DEBUG(dbgs() << "Initial selection DAG: "
+                    << printMBBReference(*FuncInfo->MBB) << " '" << BlockName
+                    << "'\n";
+             CurDAG->dump());
+
+  if (ViewDAGCombine1 && MatchFilterBB)
+    CurDAG->viewGraph("dag-combine1 input for " + BlockName);
+
+  // Run the DAG combiner in pre-legalize mode.
+  {
+    NamedRegionTimer T("combine1", "DAG Combining 1", GroupName,
+                       GroupDescription, TimePassesIsEnabled);
+    CurDAG->CombineMEF(BeforeLegalizeTypes, AA, OptLevel);
+  }
+
+#ifndef NDEBUG
+  if (TTI.hasBranchDivergence())
+    CurDAG->VerifyDAGDiverence();
+#endif
+
+  LLVM_DEBUG(dbgs() << "Optimized lowered selection DAG: "
+                    << printMBBReference(*FuncInfo->MBB) << " '" << BlockName
+                    << "'\n";
+             CurDAG->dump());
+
+  // Second step, hack on the DAG until it only uses operations and types that
+  // the target supports.
+  if (ViewLegalizeTypesDAGs && MatchFilterBB)
+    CurDAG->viewGraph("legalize-types input for " + BlockName);
+
+  bool Changed;
+  {
+    NamedRegionTimer T("legalize_types", "Type Legalization", GroupName,
+                       GroupDescription, TimePassesIsEnabled);
+    Changed = CurDAG->LegalizeTypes();
+  }
+
+#ifndef NDEBUG
+  if (TTI.hasBranchDivergence())
+    CurDAG->VerifyDAGDiverence();
+#endif
+
+  LLVM_DEBUG(dbgs() << "Type-legalized selection DAG: "
+                    << printMBBReference(*FuncInfo->MBB) << " '" << BlockName
+                    << "'\n";
+             CurDAG->dump());
+
+  // Only allow creation of legal node types.
+  CurDAG->NewNodesMustHaveLegalTypes = true;
+
+  if (Changed) {
+    if (ViewDAGCombineLT && MatchFilterBB)
+      CurDAG->viewGraph("dag-combine-lt input for " + BlockName);
+
+    // Run the DAG combiner in post-type-legalize mode.
+    {
+      NamedRegionTimer T("combine_lt", "DAG Combining after legalize types",
+                         GroupName, GroupDescription, TimePassesIsEnabled);
+      CurDAG->CombineMEF(AfterLegalizeTypes, AA, OptLevel);
+    }
+
+#ifndef NDEBUG
+    if (TTI.hasBranchDivergence())
+      CurDAG->VerifyDAGDiverence();
+#endif
+
+    LLVM_DEBUG(dbgs() << "Optimized type-legalized selection DAG: "
+                      << printMBBReference(*FuncInfo->MBB) << " '" << BlockName
+                      << "'\n";
+               CurDAG->dump());
+  }
+
+  {
+    NamedRegionTimer T("legalize_vec", "Vector Legalization", GroupName,
+                       GroupDescription, TimePassesIsEnabled);
+    Changed = CurDAG->LegalizeVectors();
+  }
+
+  if (Changed) {
+    LLVM_DEBUG(dbgs() << "Vector-legalized selection DAG: "
+                      << printMBBReference(*FuncInfo->MBB) << " '" << BlockName
+                      << "'\n";
+               CurDAG->dump());
+
+    {
+      NamedRegionTimer T("legalize_types2", "Type Legalization 2", GroupName,
+                         GroupDescription, TimePassesIsEnabled);
+      CurDAG->LegalizeTypes();
+    }
+
+    LLVM_DEBUG(dbgs() << "Vector/type-legalized selection DAG: "
+                      << printMBBReference(*FuncInfo->MBB) << " '" << BlockName
+                      << "'\n";
+               CurDAG->dump());
+
+    if (ViewDAGCombineLT && MatchFilterBB)
+      CurDAG->viewGraph("dag-combine-lv input for " + BlockName);
+
+    // Run the DAG combiner in post-type-legalize mode.
+    {
+      NamedRegionTimer T("combine_lv", "DAG Combining after legalize vectors",
+                         GroupName, GroupDescription, TimePassesIsEnabled);
+      CurDAG->CombineMEF(AfterLegalizeVectorOps, AA, OptLevel);
+    }
+
+    LLVM_DEBUG(dbgs() << "Optimized vector-legalized selection DAG: "
+                      << printMBBReference(*FuncInfo->MBB) << " '" << BlockName
+                      << "'\n";
+               CurDAG->dump());
+
+#ifndef NDEBUG
+    if (TTI.hasBranchDivergence())
+      CurDAG->VerifyDAGDiverence();
+#endif
+  }
+
+  if (ViewLegalizeDAGs && MatchFilterBB)
+    CurDAG->viewGraph("legalize input for " + BlockName);
+
+  {
+    NamedRegionTimer T("legalize", "DAG Legalization", GroupName,
+                       GroupDescription, TimePassesIsEnabled);
+    CurDAG->Legalize();
+  }
+
+#ifndef NDEBUG
+  if (TTI.hasBranchDivergence())
+    CurDAG->VerifyDAGDiverence();
+#endif
+
+  LLVM_DEBUG(dbgs() << "Legalized selection DAG: "
+                    << printMBBReference(*FuncInfo->MBB) << " '" << BlockName
+                    << "'\n";
+             CurDAG->dump());
+
+  if (ViewDAGCombine2 && MatchFilterBB)
+    CurDAG->viewGraph("dag-combine2 input for " + BlockName);
+
+  // Run the DAG combiner in post-legalize mode.
+  {
+    NamedRegionTimer T("combine2", "DAG Combining 2", GroupName,
+                       GroupDescription, TimePassesIsEnabled);
+    CurDAG->CombineMEF(AfterLegalizeDAG, AA, OptLevel);
   }
 
 #ifndef NDEBUG
@@ -2001,7 +2265,7 @@ void SelectionDAGISel::SelectAllBasicBlocks(const MEFBody &FnBody) {
               LowerArguments(*entry);
               CurDAG->setRoot(SDB->getControlRoot());
               SDB->clear();
-              CodeGenAndEmitDAG();
+              CodeGenAndEmitDAGMEF();
           }
 
           // If we inserted any instructions at the beginning, make a note of
@@ -2018,7 +2282,7 @@ void SelectionDAGISel::SelectAllBasicBlocks(const MEFBody &FnBody) {
       if (FastIS && Inserted)
           FastIS->setLastLocalValue(&*std::prev(FuncInfo->InsertPt));
 
-      processDbgDeclares(FuncInfo);
+//      processDbgDeclares(FuncInfo);
   }
 
   // Iterate over all basic blocks in the function.
@@ -2108,7 +2372,7 @@ void SelectionDAGISel::SelectAllBasicBlocks(const MEFBody &FnBody) {
           }
           if (BeforeInst != Inst && isa<LoadInst>(BeforeInst) &&
               BeforeInst->hasOneUse() &&
-              FastIS->tryToFoldLoad(cast<LoadInst>(BeforeInst), Inst)) {
+              FastIS->tryToFoldLoadMEF(cast<LoadInst>(BeforeInst), Inst)) {
             // If we succeeded, don't re-select the load.
             BI = std::next(BasicBlock::const_iterator(BeforeInst));
             --NumFastIselRemaining;
@@ -2124,74 +2388,74 @@ void SelectionDAGISel::SelectAllBasicBlocks(const MEFBody &FnBody) {
         // to keep track of gc-relocates for a particular gc-statepoint. This is
         // done by SelectionDAGBuilder::LowerAsSTATEPOINT, called before
         // visitGCRelocate.
-        if (isa<CallInst>(Inst) && !isStatepoint(Inst) && !isGCRelocate(Inst) &&
-            !isGCResult(Inst)) {
-          OptimizationRemarkMissed R("sdagisel", "FastISelFailure",
-                                     Inst->getDebugLoc(), LLVMBB);
-
-          R << "FastISel missed call";
-
-          if (R.isEnabled() || EnableFastISelAbort) {
-            std::string InstStrStorage;
-            raw_string_ostream InstStr(InstStrStorage);
-            InstStr << *Inst;
-
-            R << ": " << InstStr.str();
-          }
-
-          reportFastISelFailure(*MF, *ORE, R, EnableFastISelAbort > 2);
-
-          if (!Inst->getType()->isVoidTy() && !Inst->getType()->isTokenTy() &&
-              !Inst->use_empty()) {
-            unsigned &R = FuncInfo->ValueMap[Inst];
-            if (!R)
-              R = FuncInfo->CreateRegs(Inst);
-          }
-
-          bool HadTailCall = false;
-          MachineBasicBlock::iterator SavedInsertPt = FuncInfo->InsertPt;
-          SelectBasicBlock(Inst->getIterator(), BI, HadTailCall);
-
-          // If the call was emitted as a tail call, we're done with the block.
-          // We also need to delete any previously emitted instructions.
-          if (HadTailCall) {
-            FastIS->removeDeadCode(SavedInsertPt, FuncInfo->MBB->end());
-            --BI;
-            break;
-          }
-
-          // Recompute NumFastIselRemaining as Selection DAG instruction
-          // selection may have handled the call, input args, etc.
-          unsigned RemainingNow = std::distance(Begin, BI);
-          NumFastIselFailures += NumFastIselRemaining - RemainingNow;
-          NumFastIselRemaining = RemainingNow;
-          continue;
-        }
-
-        OptimizationRemarkMissed R("sdagisel", "FastISelFailure",
-                                   Inst->getDebugLoc(), LLVMBB);
-
-        bool ShouldAbort = EnableFastISelAbort;
-        if (Inst->isTerminator()) {
-          // Use a different message for terminator misses.
-          R << "FastISel missed terminator";
-          // Don't abort for terminator unless the level is really high
-          ShouldAbort = (EnableFastISelAbort > 2);
-        } else {
-          R << "FastISel missed";
-        }
-
-        if (R.isEnabled() || EnableFastISelAbort) {
-          std::string InstStrStorage;
-          raw_string_ostream InstStr(InstStrStorage);
-          InstStr << *Inst;
-          R << ": " << InstStr.str();
-        }
-
-        reportFastISelFailure(*MF, *ORE, R, ShouldAbort);
-
-        NumFastIselFailures += NumFastIselRemaining;
-        break;
+//        if (isa<CallInst>(Inst) && !isStatepoint(Inst) && !isGCRelocate(Inst) &&
+//            !isGCResult(Inst)) {
+//          OptimizationRemarkMissed R("sdagisel", "FastISelFailure",
+//                                     Inst->getDebugLoc(), LLVMBB);
+//
+//          R << "FastISel missed call";
+//
+//          if (R.isEnabled() || EnableFastISelAbort) {
+//            std::string InstStrStorage;
+//            raw_string_ostream InstStr(InstStrStorage);
+//            InstStr << *Inst;
+//
+//            R << ": " << InstStr.str();
+//          }
+//
+//          reportFastISelFailure(*MF, *ORE, R, EnableFastISelAbort > 2);
+//
+//          if (!Inst->getType()->isVoidTy() && !Inst->getType()->isTokenTy() &&
+//              !Inst->use_empty()) {
+//            unsigned &R = FuncInfo->ValueMap[Inst];
+//            if (!R)
+//              R = FuncInfo->CreateRegs(Inst);
+//          }
+//
+//          bool HadTailCall = false;
+//          MachineBasicBlock::iterator SavedInsertPt = FuncInfo->InsertPt;
+//          SelectBasicBlock(Inst->getIterator(), BI, HadTailCall);
+//
+//          // If the call was emitted as a tail call, we're done with the block.
+//          // We also need to delete any previously emitted instructions.
+//          if (HadTailCall) {
+//            FastIS->removeDeadCode(SavedInsertPt, FuncInfo->MBB->end());
+//            --BI;
+//            break;
+//          }
+//
+//          // Recompute NumFastIselRemaining as Selection DAG instruction
+//          // selection may have handled the call, input args, etc.
+//          unsigned RemainingNow = std::distance(Begin, BI);
+//          NumFastIselFailures += NumFastIselRemaining - RemainingNow;
+//          NumFastIselRemaining = RemainingNow;
+//          continue;
+//        }
+//
+//        OptimizationRemarkMissed R("sdagisel", "FastISelFailure",
+//                                   Inst->getDebugLoc(), LLVMBB);
+//
+//        bool ShouldAbort = EnableFastISelAbort;
+//        if (Inst->isTerminator()) {
+//          // Use a different message for terminator misses.
+//          R << "FastISel missed terminator";
+//          // Don't abort for terminator unless the level is really high
+//          ShouldAbort = (EnableFastISelAbort > 2);
+//        } else {
+//          R << "FastISel missed";
+//        }
+//
+//        if (R.isEnabled() || EnableFastISelAbort) {
+//          std::string InstStrStorage;
+//          raw_string_ostream InstStr(InstStrStorage);
+//          InstStr << *Inst;
+//          R << ": " << InstStr.str();
+//        }
+//
+//        reportFastISelFailure(*MF, *ORE, R, ShouldAbort);
+//
+//        NumFastIselFailures += NumFastIselRemaining;
+//        break;
       }
 
       FastIS->recomputeInsertPt();
@@ -2214,7 +2478,7 @@ void SelectionDAGISel::SelectAllBasicBlocks(const MEFBody &FnBody) {
       // not handled by FastISel. If FastISel is not run, this is the entire
       // block.
       bool HadTailCall;
-      SelectBasicBlock(Begin, BI, HadTailCall);
+      SelectBasicBlockMEF(Begin, BI, HadTailCall);
 
       // But if FastISel was run, we already selected some of the block.
       // If we emitted a tail-call, we need to delete any previously emitted
@@ -2225,7 +2489,7 @@ void SelectionDAGISel::SelectAllBasicBlocks(const MEFBody &FnBody) {
 
     if (FastIS)
       FastIS->finishBasicBlock();
-    FinishBasicBlock();
+    FinishBasicBlockMEF();
     FuncInfo->PHINodesToUpdate.clear();
     ElidedArgCopyInstrs.clear();
   }
@@ -2549,6 +2813,264 @@ SelectionDAGISel::FinishBasicBlock() {
     CodeGenAndEmitDAG();
 
     // Remember the last block, now that any splitting is done, for use in
+    // populating PHI nodes in successors.
+    MachineBasicBlock *ThisBB = FuncInfo->MBB;
+
+    // Handle any PHI nodes in successors of this chunk, as if we were coming
+    // from the original BB before switch expansion.  Note that PHI nodes can
+    // occur multiple times in PHINodesToUpdate.  We have to be very careful to
+    // handle them the right number of times.
+    for (unsigned i = 0, e = Succs.size(); i != e; ++i) {
+      FuncInfo->MBB = Succs[i];
+      FuncInfo->InsertPt = FuncInfo->MBB->end();
+      // FuncInfo->MBB may have been removed from the CFG if a branch was
+      // constant folded.
+      if (ThisBB->isSuccessor(FuncInfo->MBB)) {
+        for (MachineBasicBlock::iterator
+             MBBI = FuncInfo->MBB->begin(), MBBE = FuncInfo->MBB->end();
+             MBBI != MBBE && MBBI->isPHI(); ++MBBI) {
+          MachineInstrBuilder PHI(*MF, MBBI);
+          // This value for this PHI node is recorded in PHINodesToUpdate.
+          for (unsigned pn = 0; ; ++pn) {
+            assert(pn != FuncInfo->PHINodesToUpdate.size() &&
+                   "Didn't find PHI entry!");
+            if (FuncInfo->PHINodesToUpdate[pn].first == PHI) {
+              PHI.addReg(FuncInfo->PHINodesToUpdate[pn].second).addMBB(ThisBB);
+              break;
+            }
+          }
+        }
+      }
+    }
+  }
+  SDB->SL->SwitchCases.clear();
+}
+void
+SelectionDAGISel::FinishBasicBlockMEF() {
+  LLVM_DEBUG(dbgs() << "Total amount of phi nodes to update: "
+                    << FuncInfo->PHINodesToUpdate.size() << "\n";
+             for (unsigned i = 0, e = FuncInfo->PHINodesToUpdate.size(); i != e;
+                  ++i) dbgs()
+             << "Node " << i << " : (" << FuncInfo->PHINodesToUpdate[i].first
+             << ", " << FuncInfo->PHINodesToUpdate[i].second << ")\n");
+
+  // Next, now that we know what the last MBB the LLVM BB expanded is, update
+  // PHI nodes in successors.
+  for (unsigned i = 0, e = FuncInfo->PHINodesToUpdate.size(); i != e; ++i) {
+    MachineInstrBuilder PHI(*MF, FuncInfo->PHINodesToUpdate[i].first);
+    assert(PHI->isPHI() &&
+           "This is not a machine PHI node that we are updating!");
+    if (!FuncInfo->MBB->isSuccessor(PHI->getParent()))
+      continue;
+    PHI.addReg(FuncInfo->PHINodesToUpdate[i].second).addMBB(FuncInfo->MBB);
+  }
+
+  // Handle stack protector.
+  if (SDB->SPDescriptor.shouldEmitFunctionBasedCheckStackProtector()) {
+    // The target provides a guard check function. There is no need to
+    // generate error handling code or to split current basic block.
+    MachineBasicBlock *ParentMBB = SDB->SPDescriptor.getParentMBB();
+
+    // Add load and check to the basicblock.
+    FuncInfo->MBB = ParentMBB;
+    FuncInfo->InsertPt =
+        FindSplitPointForStackProtector(ParentMBB);
+    SDB->visitSPDescriptorParent(SDB->SPDescriptor, ParentMBB);
+    CurDAG->setRoot(SDB->getRoot());
+    SDB->clear();
+    CodeGenAndEmitDAGMEF();
+
+    // Clear the Per-BB State.
+    SDB->SPDescriptor.resetPerBBState();
+  } else if (SDB->SPDescriptor.shouldEmitStackProtector()) {
+    MachineBasicBlock *ParentMBB = SDB->SPDescriptor.getParentMBB();
+    MachineBasicBlock *SuccessMBB = SDB->SPDescriptor.getSuccessMBB();
+
+    // Find the split point to split the parent mbb. At the same time copy all
+    // physical registers used in the tail of parent mbb into virtual registers
+    // before the split point and back into physical registers after the split
+    // point. This prevents us needing to deal with Live-ins and many other
+    // register allocation issues caused by us splitting the parent mbb. The
+    // register allocator will clean up said virtual copies later on.
+    MachineBasicBlock::iterator SplitPoint =
+        FindSplitPointForStackProtector(ParentMBB);
+
+    // Splice the terminator of ParentMBB into SuccessMBB.
+    SuccessMBB->splice(SuccessMBB->end(), ParentMBB,
+                       SplitPoint,
+                       ParentMBB->end());
+
+    // Add compare/jump on neq/jump to the parent BB.
+    FuncInfo->MBB = ParentMBB;
+    FuncInfo->InsertPt = ParentMBB->end();
+    SDB->visitSPDescriptorParent(SDB->SPDescriptor, ParentMBB);
+    CurDAG->setRoot(SDB->getRoot());
+    SDB->clear();
+    CodeGenAndEmitDAGMEF();
+
+    // CodeGen Failure MBB if we have not codegened it yet.
+    MachineBasicBlock *FailureMBB = SDB->SPDescriptor.getFailureMBB();
+    if (FailureMBB->empty()) {
+      FuncInfo->MBB = FailureMBB;
+      FuncInfo->InsertPt = FailureMBB->end();
+      SDB->visitSPDescriptorFailure(SDB->SPDescriptor);
+      CurDAG->setRoot(SDB->getRoot());
+      SDB->clear();
+      CodeGenAndEmitDAGMEF();
+    }
+
+    // Clear the Per-BB State.
+    SDB->SPDescriptor.resetPerBBState();
+  }
+
+  // Lower each BitTestBlock.
+  for (auto &BTB : SDB->SL->BitTestCases) {
+    // Lower header first, if it wasn't already lowered
+    if (!BTB.Emitted) {
+      // Set the current basic block to the mbb we wish to insert the code into
+      FuncInfo->MBB = BTB.Parent;
+      FuncInfo->InsertPt = FuncInfo->MBB->end();
+      // Emit the code
+      SDB->visitBitTestHeader(BTB, FuncInfo->MBB);
+      CurDAG->setRoot(SDB->getRoot());
+      SDB->clear();
+      CodeGenAndEmitDAGMEF();
+    }
+
+    BranchProbability UnhandledProb = BTB.Prob;
+    for (unsigned j = 0, ej = BTB.Cases.size(); j != ej; ++j) {
+      UnhandledProb -= BTB.Cases[j].ExtraProb;
+      // Set the current basic block to the mbb we wish to insert the code into
+      FuncInfo->MBB = BTB.Cases[j].ThisBB;
+      FuncInfo->InsertPt = FuncInfo->MBB->end();
+      // Emit the code
+
+      // If all cases cover a contiguous range, it is not necessary to jump to
+      // the default block after the last bit test fails. This is because the
+      // range check during bit test header creation has guaranteed that every
+      // case here doesn't go outside the range. In this case, there is no need
+      // to perform the last bit test, as it will always be true. Instead, make
+      // the second-to-last bit-test fall through to the target of the last bit
+      // test, and delete the last bit test.
+
+      MachineBasicBlock *NextMBB;
+      if (BTB.ContiguousRange && j + 2 == ej) {
+        // Second-to-last bit-test with contiguous range: fall through to the
+        // target of the final bit test.
+        NextMBB = BTB.Cases[j + 1].TargetBB;
+      } else if (j + 1 == ej) {
+        // For the last bit test, fall through to Default.
+        NextMBB = BTB.Default;
+      } else {
+        // Otherwise, fall through to the next bit test.
+        NextMBB = BTB.Cases[j + 1].ThisBB;
+      }
+
+      SDB->visitBitTestCase(BTB, NextMBB, UnhandledProb, BTB.Reg, BTB.Cases[j],
+                            FuncInfo->MBB);
+
+      CurDAG->setRoot(SDB->getRoot());
+      SDB->clear();
+      CodeGenAndEmitDAGMEF();
+
+      if (BTB.ContiguousRange && j + 2 == ej) {
+        // Since we're not going to use the final bit test, remove it.
+        BTB.Cases.pop_back();
+        break;
+      }
+    }
+
+    // Update PHI Nodes
+    for (unsigned pi = 0, pe = FuncInfo->PHINodesToUpdate.size();
+         pi != pe; ++pi) {
+      MachineInstrBuilder PHI(*MF, FuncInfo->PHINodesToUpdate[pi].first);
+      MachineBasicBlock *PHIBB = PHI->getParent();
+      assert(PHI->isPHI() &&
+             "This is not a machine PHI node that we are updating!");
+      // This is "default" BB. We have two jumps to it. From "header" BB and
+      // from last "case" BB, unless the latter was skipped.
+      if (PHIBB == BTB.Default) {
+        PHI.addReg(FuncInfo->PHINodesToUpdate[pi].second).addMBB(BTB.Parent);
+        if (!BTB.ContiguousRange) {
+          PHI.addReg(FuncInfo->PHINodesToUpdate[pi].second)
+              .addMBB(BTB.Cases.back().ThisBB);
+         }
+      }
+      // One of "cases" BB.
+      for (unsigned j = 0, ej = BTB.Cases.size();
+           j != ej; ++j) {
+        MachineBasicBlock* cBB = BTB.Cases[j].ThisBB;
+        if (cBB->isSuccessor(PHIBB))
+          PHI.addReg(FuncInfo->PHINodesToUpdate[pi].second).addMBB(cBB);
+      }
+    }
+  }
+  SDB->SL->BitTestCases.clear();
+
+  // If the JumpTable record is filled in, then we need to emit a jump table.
+  // Updating the PHI nodes is tricky in this case, since we need to determine
+  // whether the PHI is a successor of the range check MBB or the jump table MBB
+  for (unsigned i = 0, e = SDB->SL->JTCases.size(); i != e; ++i) {
+    // Lower header first, if it wasn't already lowered
+    if (!SDB->SL->JTCases[i].first.Emitted) {
+      // Set the current basic block to the mbb we wish to insert the code into
+      FuncInfo->MBB = SDB->SL->JTCases[i].first.HeaderBB;
+      FuncInfo->InsertPt = FuncInfo->MBB->end();
+      // Emit the code
+      SDB->visitJumpTableHeader(SDB->SL->JTCases[i].second,
+                                SDB->SL->JTCases[i].first, FuncInfo->MBB);
+      CurDAG->setRoot(SDB->getRoot());
+      SDB->clear();
+      CodeGenAndEmitDAGMEF();
+    }
+
+    // Set the current basic block to the mbb we wish to insert the code into
+    FuncInfo->MBB = SDB->SL->JTCases[i].second.MBB;
+    FuncInfo->InsertPt = FuncInfo->MBB->end();
+    // Emit the code
+    SDB->visitJumpTable(SDB->SL->JTCases[i].second);
+    CurDAG->setRoot(SDB->getRoot());
+    SDB->clear();
+    CodeGenAndEmitDAGMEF();
+
+    // Update PHI Nodes
+    for (unsigned pi = 0, pe = FuncInfo->PHINodesToUpdate.size();
+         pi != pe; ++pi) {
+      MachineInstrBuilder PHI(*MF, FuncInfo->PHINodesToUpdate[pi].first);
+      MachineBasicBlock *PHIBB = PHI->getParent();
+      assert(PHI->isPHI() &&
+             "This is not a machine PHI node that we are updating!");
+      // "default" BB. We can go there only from header BB.
+      if (PHIBB == SDB->SL->JTCases[i].second.Default)
+        PHI.addReg(FuncInfo->PHINodesToUpdate[pi].second)
+           .addMBB(SDB->SL->JTCases[i].first.HeaderBB);
+      // JT BB. Just iterate over successors here
+      if (FuncInfo->MBB->isSuccessor(PHIBB))
+        PHI.addReg(FuncInfo->PHINodesToUpdate[pi].second).addMBB(FuncInfo->MBB);
+    }
+  }
+  SDB->SL->JTCases.clear();
+
+  // If we generated any switch lowering information, build and codegen any
+  // additional DAGs necessary.
+  for (unsigned i = 0, e = SDB->SL->SwitchCases.size(); i != e; ++i) {
+    // Set the current basic block to the mbb we wish to insert the code into
+    FuncInfo->MBB = SDB->SL->SwitchCases[i].ThisBB;
+    FuncInfo->InsertPt = FuncInfo->MBB->end();
+
+    // Determine the unique successors.
+    SmallVector<MachineBasicBlock *, 2> Succs;
+    Succs.push_back(SDB->SL->SwitchCases[i].TrueBB);
+    if (SDB->SL->SwitchCases[i].TrueBB != SDB->SL->SwitchCases[i].FalseBB)
+      Succs.push_back(SDB->SL->SwitchCases[i].FalseBB);
+
+    // Emit the code. Note that this could result in FuncInfo->MBB being split.
+    SDB->visitSwitchCase(SDB->SL->SwitchCases[i], FuncInfo->MBB);
+    CurDAG->setRoot(SDB->getRoot());
+    SDB->clear();
+    CodeGenAndEmitDAGMEF();
+
+    // Remember the last block, now that any processDbgDeclaressplitting is done, for use in
     // populating PHI nodes in successors.
     MachineBasicBlock *ThisBB = FuncInfo->MBB;
 

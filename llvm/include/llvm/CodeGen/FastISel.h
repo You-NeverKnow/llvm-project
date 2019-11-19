@@ -295,6 +295,7 @@ public:
   ///
   /// If we succeed folding, return true.
   bool tryToFoldLoad(const LoadInst *LI, const Instruction *FoldInst);
+  bool tryToFoldLoadMEF(const LoadInst *LI, const Instruction *FoldInst);
 
   /// The specified machine instr operand is a vreg, and that vreg is
   /// being provided by the specified load instruction.  If possible, try to
@@ -303,6 +304,10 @@ public:
   ///
   /// This method should be implemented by targets.
   virtual bool tryToFoldLoadIntoMI(MachineInstr * /*MI*/, unsigned /*OpNo*/,
+                                   const LoadInst * /*LI*/) {
+    return false;
+  }
+  virtual bool tryToFoldLoadIntoMIMEF(MachineInstr * /*MI*/, unsigned /*OpNo*/,
                                    const LoadInst * /*LI*/) {
     return false;
   }

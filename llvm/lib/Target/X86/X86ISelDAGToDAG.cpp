@@ -212,6 +212,7 @@ namespace {
     }
 
     void EmitFunctionEntryCode() override;
+    void EmitFunctionEntryCodeMEF() override;
 
     bool IsProfitableToFold(SDValue N, SDNode *U, SDNode *Root) const override;
 
@@ -1335,6 +1336,12 @@ void X86DAGToDAGISel::EmitFunctionEntryCode() {
   const Function &F = MF->getFunction();
   if (F.hasExternalLinkage() && F.getName() == "main")
     emitSpecialCodeForMain();
+}
+void X86DAGToDAGISel::EmitFunctionEntryCodeMEF() {
+  // If this is main, emit special code for main.
+//  const MEFBody &F = MF->getFunction();
+//  if (F.hasExternalLinkage() && F.getName() == "main")
+//    emitSpecialCodeForMain();
 }
 
 static bool isDispSafeForFrameIndex(int64_t Val) {

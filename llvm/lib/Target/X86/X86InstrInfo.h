@@ -454,6 +454,12 @@ public:
                                       MachineBasicBlock::iterator InsertPt,
                                       unsigned Size, unsigned Alignment,
                                       bool AllowCommute) const;
+  MachineInstr *foldMemoryOperandImplMEF(MachineFunction &MF, MachineInstr &MI,
+                                      unsigned OpNum,
+                                      ArrayRef<MachineOperand> MOs,
+                                      MachineBasicBlock::iterator InsertPt,
+                                      unsigned Size, unsigned Alignment,
+                                      bool AllowCommute) const;
 
   bool isHighLatencyDef(int opc) const override;
 

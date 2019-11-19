@@ -197,10 +197,11 @@ namespace {
     SDValue visit(SDNode *N);
 
   public:
-    DAGCombiner(SelectionDAG &D, AliasAnalysis *AA, CodeGenOpt::Level OL)
+    DAGCombiner(SelectionDAG &D, AliasAnalysis *AA, CodeGenOpt::Level OL, bool isMEF = false)
         : DAG(D), TLI(D.getTargetLoweringInfo()), Level(BeforeLegalizeTypes),
           OptLevel(OL), AA(AA) {
-      ForCodeSize = DAG.getMachineFunction().getFunction().hasOptSize();
+        if (!isMEF)
+            ForCodeSize = DAG.getMachineFunction().getFunction().hasOptSize();
 
       MaximumLegalStoreInBits = 0;
       for (MVT VT : MVT::all_valuetypes())
@@ -20835,4 +20836,9 @@ void SelectionDAG::Combine(CombineLevel Level, AliasAnalysis *AA,
                            CodeGenOpt::Level OptLevel) {
   /// This is the main entry point to this class.
   DAGCombiner(*this, AA, OptLevel).Run(Level);
+}
+void SelectionDAG::CombineMEF(CombineLevel Level, AliasAnalysis *AA,
+                           CodeGenOpt::Level OptLevel) {
+  /// This is the main entry point to this class.
+  DAGCombiner(*this, AA, OptLevel, true).Run(Level);
 }

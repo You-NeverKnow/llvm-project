@@ -27,13 +27,14 @@
 #include "llvm/Support/MachineValueType.h"
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Support/Printable.h"
+#include "llvm/ADT/BitVector.h"
 #include <cassert>
 #include <cstdint>
 #include <functional>
 
 namespace llvm {
 
-class BitVector;
+//class BitVector;
 class LiveRegMatrix;
 class MachineFunction;
 class MachineInstr;
@@ -508,6 +509,7 @@ public:
   /// register as well, to avoid them getting allocated indirectly. You may use
   /// markSuperRegs() and checkAllSuperRegsMarked() in this case.
   virtual BitVector getReservedRegs(const MachineFunction &MF) const = 0;
+  virtual BitVector getReservedRegsMEF(const MachineFunction &MF) const {return BitVector();};
 
   /// Returns false if we can't guarantee that Physreg, specified as an IR asm
   /// clobber constraint, will be preserved across the statement.
@@ -899,6 +901,7 @@ public:
   /// This cannot be overriden by the target, but canRealignStack can be
   /// overridden.
   bool needsStackRealignment(const MachineFunction &MF) const;
+  bool needsStackRealignmentMEF(const MachineFunction &MF) const;
 
   /// Get the offset from the referenced frame index in the instruction,
   /// if there is one.

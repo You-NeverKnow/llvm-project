@@ -2596,6 +2596,7 @@ public:
   /// the set of reserved registers.
   /// The default implementation just freezes the set of reserved registers.
   virtual void finalizeLowering(MachineFunction &MF) const;
+  virtual void finalizeLoweringMEF(MachineFunction &MF) const;
 
 private:
   const TargetMachine &TM;
@@ -3307,6 +3308,12 @@ public:
   /// should fill in the InVals array with legal-type argument values, and
   /// return the resulting token chain value.
   virtual SDValue LowerFormalArguments(
+      SDValue /*Chain*/, CallingConv::ID /*CallConv*/, bool /*isVarArg*/,
+      const SmallVectorImpl<ISD::InputArg> & /*Ins*/, const SDLoc & /*dl*/,
+      SelectionDAG & /*DAG*/, SmallVectorImpl<SDValue> & /*InVals*/) const {
+    llvm_unreachable("Not Implemented");
+  }
+  virtual SDValue LowerFormalArgumentsMEF(
       SDValue /*Chain*/, CallingConv::ID /*CallConv*/, bool /*isVarArg*/,
       const SmallVectorImpl<ISD::InputArg> & /*Ins*/, const SDLoc & /*dl*/,
       SelectionDAG & /*DAG*/, SmallVectorImpl<SDValue> & /*InVals*/) const {

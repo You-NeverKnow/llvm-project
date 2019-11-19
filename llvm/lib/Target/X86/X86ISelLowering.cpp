@@ -3496,6 +3496,370 @@ SDValue X86TargetLowering::LowerFormalArguments(
   return Chain;
 }
 
+SDValue X86TargetLowering::LowerFormalArgumentsMEF(
+    SDValue Chain, CallingConv::ID CallConv, bool isVarArg,
+    const SmallVectorImpl<ISD::InputArg> &Ins, const SDLoc &dl,
+    SelectionDAG &DAG, SmallVectorImpl<SDValue> &InVals) const {
+  MachineFunction &MF = DAG.getMachineFunction();
+  X86MachineFunctionInfo *FuncInfo = MF.getInfo<X86MachineFunctionInfo>();
+  const TargetFrameLowering &TFI = *Subtarget.getFrameLowering();
+
+  const MEFBody &FnBody = *MF.getFunctionMEF();
+//  if (F.hasExternalLinkage() && Subtarget.isTargetCygMing() &&
+//      F.getName() == "main")
+//    FuncInfo->setForceFramePointer(true);
+
+  MachineFrameInfo &MFI = MF.getFrameInfo();
+  bool Is64Bit = Subtarget.is64Bit();
+  bool IsWin64 = Subtarget.isCallingConvWin64(CallConv);
+
+  assert(
+      !(isVarArg && canGuaranteeTCO(CallConv)) &&
+      "Var args not supported with calling conv' regcall, fastcc, ghc or hipe");
+
+  // Assign locations to all of the incoming arguments.
+  SmallVector<CCValAssign, 16> ArgLocs;
+  CCState CCInfo(CallConv, isVarArg, MF, ArgLocs, *DAG.getContext());
+
+  // Allocate shadow area for Win64.
+  if (IsWin64)
+    CCInfo.AllocateStack(32, 8);
+
+  CCInfo.AnalyzeArguments(Ins, CC_X86);
+
+  // In vectorcall calling convention a second pass is required for the HVA
+  // types.
+  if (CallingConv::X86_VectorCall == CallConv) {
+    CCInfo.AnalyzeArgumentsSecondPass(Ins, CC_X86);
+  }
+
+  // The next loop assumes that the locations are in the same order of the
+  // input arguments.
+  assert(isSortedByValueNo(ArgLocs) &&
+         "Argument Location list must be sorted before lowering");
+
+  SDValue ArgValue;
+  for (unsigned I = 0, InsIndex = 0, E = ArgLocs.size(); I != E;
+       ++I, ++InsIndex) {
+    assert(InsIndex < Ins.size() && "Invalid Ins index");
+    CCValAssign &VA = ArgLocs[I];
+
+    if (VA.isRegLoc()) {
+      EVT RegVT = VA.getLocVT();
+      if (VA.needsCustom()) {
+        assert(
+            VA.getValVT() == MVT::v64i1 &&
+            "Currently the only custom case is when we split v64i1 to 2 regs");
+
+        // v64i1 values, in regcall calling convention, that are
+        // compiled to 32 bit arch, are split up into two registers.
+        ArgValue =
+            getv64i1Argument(VA, ArgLocs[++I], Chain, DAG, dl, Subtarget);
+      } else {
+        const TargetRegisterClass *RC;
+        if (RegVT == MVT::i8)
+          RC = &X86::GR8RegClass;
+        else if (RegVT == MVT::i16)
+          RC = &X86::GR16RegClass;
+        else if (RegVT == MVT::i32)
+          RC = &X86::GR32RegClass;
+        else if (Is64Bit && RegVT == MVT::i64)
+          RC = &X86::GR64RegClass;
+        else if (RegVT == MVT::f32)
+          RC = Subtarget.hasAVX512() ? &X86::FR32XRegClass : &X86::FR32RegClass;
+        else if (RegVT == MVT::f64)
+          RC = Subtarget.hasAVX512() ? &X86::FR64XRegClass : &X86::FR64RegClass;
+        else if (RegVT == MVT::f80)
+          RC = &X86::RFP80RegClass;
+        else if (RegVT == MVT::f128)
+          RC = &X86::VR128RegClass;
+        else if (RegVT.is512BitVector())
+          RC = &X86::VR512RegClass;
+        else if (RegVT.is256BitVector())
+          RC = Subtarget.hasVLX() ? &X86::VR256XRegClass : &X86::VR256RegClass;
+        else if (RegVT.is128BitVector())
+          RC = Subtarget.hasVLX() ? &X86::VR128XRegClass : &X86::VR128RegClass;
+        else if (RegVT == MVT::x86mmx)
+          RC = &X86::VR64RegClass;
+        else if (RegVT == MVT::v1i1)
+          RC = &X86::VK1RegClass;
+        else if (RegVT == MVT::v8i1)
+          RC = &X86::VK8RegClass;
+        else if (RegVT == MVT::v16i1)
+          RC = &X86::VK16RegClass;
+        else if (RegVT == MVT::v32i1)
+          RC = &X86::VK32RegClass;
+        else if (RegVT == MVT::v64i1)
+          RC = &X86::VK64RegClass;
+        else
+          llvm_unreachable("Unknown argument type!");
+
+        unsigned Reg = MF.addLiveIn(VA.getLocReg(), RC);
+        ArgValue = DAG.getCopyFromReg(Chain, dl, Reg, RegVT);
+      }
+
+      // If this is an 8 or 16-bit value, it is really passed promoted to 32
+      // bits.  Insert an assert[sz]ext to capture this, then truncate to the
+      // right size.
+      if (VA.getLocInfo() == CCValAssign::SExt)
+        ArgValue = DAG.getNode(ISD::AssertSext, dl, RegVT, ArgValue,
+                               DAG.getValueType(VA.getValVT()));
+      else if (VA.getLocInfo() == CCValAssign::ZExt)
+        ArgValue = DAG.getNode(ISD::AssertZext, dl, RegVT, ArgValue,
+                               DAG.getValueType(VA.getValVT()));
+      else if (VA.getLocInfo() == CCValAssign::BCvt)
+        ArgValue = DAG.getBitcast(VA.getValVT(), ArgValue);
+
+      if (VA.isExtInLoc()) {
+        // Handle MMX values passed in XMM regs.
+        if (RegVT.isVector() && VA.getValVT().getScalarType() != MVT::i1)
+          ArgValue = DAG.getNode(X86ISD::MOVDQ2Q, dl, VA.getValVT(), ArgValue);
+        else if (VA.getValVT().isVector() &&
+                 VA.getValVT().getScalarType() == MVT::i1 &&
+                 ((VA.getLocVT() == MVT::i64) || (VA.getLocVT() == MVT::i32) ||
+                  (VA.getLocVT() == MVT::i16) || (VA.getLocVT() == MVT::i8))) {
+          // Promoting a mask type (v*i1) into a register of type i64/i32/i16/i8
+          ArgValue = lowerRegToMasks(ArgValue, VA.getValVT(), RegVT, dl, DAG);
+        } else
+          ArgValue = DAG.getNode(ISD::TRUNCATE, dl, VA.getValVT(), ArgValue);
+      }
+    } else {
+      assert(VA.isMemLoc());
+      ArgValue =
+          LowerMemArgument(Chain, CallConv, Ins, dl, DAG, VA, MFI, InsIndex);
+    }
+
+    // If value is passed via pointer - do a load.
+    if (VA.getLocInfo() == CCValAssign::Indirect && !Ins[I].Flags.isByVal())
+      ArgValue =
+          DAG.getLoad(VA.getValVT(), dl, Chain, ArgValue, MachinePointerInfo());
+
+    InVals.push_back(ArgValue);
+  }
+
+  for (unsigned I = 0, E = Ins.size(); I != E; ++I) {
+    // Swift calling convention does not require we copy the sret argument
+    // into %rax/%eax for the return. We don't set SRetReturnReg for Swift.
+    if (CallConv == CallingConv::Swift)
+      continue;
+
+    // All x86 ABIs require that for returning structs by value we copy the
+    // sret argument into %rax/%eax (depending on ABI) for the return. Save
+    // the argument into a virtual register so that we can access it from the
+    // return points.
+    if (Ins[I].Flags.isSRet()) {
+      unsigned Reg = FuncInfo->getSRetReturnReg();
+      if (!Reg) {
+        MVT PtrTy = getPointerTy(DAG.getDataLayout());
+        Reg = MF.getRegInfo().createVirtualRegister(getRegClassFor(PtrTy));
+        FuncInfo->setSRetReturnReg(Reg);
+      }
+      SDValue Copy = DAG.getCopyToReg(DAG.getEntryNode(), dl, Reg, InVals[I]);
+      Chain = DAG.getNode(ISD::TokenFactor, dl, MVT::Other, Copy, Chain);
+      break;
+    }
+  }
+
+  unsigned StackSize = CCInfo.getNextStackOffset();
+  // Align stack specially for tail calls.
+  if (shouldGuaranteeTCO(CallConv,
+                         MF.getTarget().Options.GuaranteedTailCallOpt))
+    StackSize = GetAlignedArgumentStackSize(StackSize, DAG);
+
+  // If the function takes variable number of arguments, make a frame index for
+  // the start of the first vararg value... for expansion of llvm.va_start. We
+  // can skip this if there are no va_start calls.
+  if (MFI.hasVAStart() &&
+      (Is64Bit || (CallConv != CallingConv::X86_FastCall &&
+                   CallConv != CallingConv::X86_ThisCall))) {
+    FuncInfo->setVarArgsFrameIndex(MFI.CreateFixedObject(1, StackSize, true));
+  }
+
+  // Figure out if XMM registers are in use.
+//  assert(!(Subtarget.useSoftFloat() &&
+//           F.hasFnAttribute(Attribute::NoImplicitFloat)) &&
+//         "SSE register cannot be used when SSE is disabled!");
+
+  // 64-bit calling conventions support varargs and register parameters, so we
+  // have to do extra work to spill them in the prologue.
+  if (Is64Bit && isVarArg && MFI.hasVAStart()) {
+    // Find the first unallocated argument registers.
+    ArrayRef<MCPhysReg> ArgGPRs = get64BitArgumentGPRs(CallConv, Subtarget);
+    ArrayRef<MCPhysReg> ArgXMMs = get64BitArgumentXMMs(MF, CallConv, Subtarget);
+    unsigned NumIntRegs = CCInfo.getFirstUnallocated(ArgGPRs);
+    unsigned NumXMMRegs = CCInfo.getFirstUnallocated(ArgXMMs);
+    assert(!(NumXMMRegs && !Subtarget.hasSSE1()) &&
+           "SSE register cannot be used when SSE is disabled!");
+
+    // Gather all the live in physical registers.
+    SmallVector<SDValue, 6> LiveGPRs;
+    SmallVector<SDValue, 8> LiveXMMRegs;
+    SDValue ALVal;
+    for (MCPhysReg Reg : ArgGPRs.slice(NumIntRegs)) {
+      unsigned GPR = MF.addLiveIn(Reg, &X86::GR64RegClass);
+      LiveGPRs.push_back(
+          DAG.getCopyFromReg(Chain, dl, GPR, MVT::i64));
+    }
+    if (!ArgXMMs.empty()) {
+      unsigned AL = MF.addLiveIn(X86::AL, &X86::GR8RegClass);
+      ALVal = DAG.getCopyFromReg(Chain, dl, AL, MVT::i8);
+      for (MCPhysReg Reg : ArgXMMs.slice(NumXMMRegs)) {
+        unsigned XMMReg = MF.addLiveIn(Reg, &X86::VR128RegClass);
+        LiveXMMRegs.push_back(
+            DAG.getCopyFromReg(Chain, dl, XMMReg, MVT::v4f32));
+      }
+    }
+
+    if (IsWin64) {
+      // Get to the caller-allocated home save location.  Add 8 to account
+      // for the return address.
+      int HomeOffset = TFI.getOffsetOfLocalArea() + 8;
+      FuncInfo->setRegSaveFrameIndex(
+          MFI.CreateFixedObject(1, NumIntRegs * 8 + HomeOffset, false));
+      // Fixup to set vararg frame on shadow area (4 x i64).
+      if (NumIntRegs < 4)
+        FuncInfo->setVarArgsFrameIndex(FuncInfo->getRegSaveFrameIndex());
+    } else {
+      // For X86-64, if there are vararg parameters that are passed via
+      // registers, then we must store them to their spots on the stack so
+      // they may be loaded by dereferencing the result of va_next.
+      FuncInfo->setVarArgsGPOffset(NumIntRegs * 8);
+      FuncInfo->setVarArgsFPOffset(ArgGPRs.size() * 8 + NumXMMRegs * 16);
+      FuncInfo->setRegSaveFrameIndex(MFI.CreateStackObject(
+          ArgGPRs.size() * 8 + ArgXMMs.size() * 16, 16, false));
+    }
+
+    // Store the integer parameter registers.
+    SmallVector<SDValue, 8> MemOps;
+    SDValue RSFIN = DAG.getFrameIndex(FuncInfo->getRegSaveFrameIndex(),
+                                      getPointerTy(DAG.getDataLayout()));
+    unsigned Offset = FuncInfo->getVarArgsGPOffset();
+    for (SDValue Val : LiveGPRs) {
+      SDValue FIN = DAG.getNode(ISD::ADD, dl, getPointerTy(DAG.getDataLayout()),
+                                RSFIN, DAG.getIntPtrConstant(Offset, dl));
+      SDValue Store =
+          DAG.getStore(Val.getValue(1), dl, Val, FIN,
+                       MachinePointerInfo::getFixedStack(
+                           DAG.getMachineFunction(),
+                           FuncInfo->getRegSaveFrameIndex(), Offset));
+      MemOps.push_back(Store);
+      Offset += 8;
+    }
+
+    if (!ArgXMMs.empty() && NumXMMRegs != ArgXMMs.size()) {
+      // Now store the XMM (fp + vector) parameter registers.
+      SmallVector<SDValue, 12> SaveXMMOps;
+      SaveXMMOps.push_back(Chain);
+      SaveXMMOps.push_back(ALVal);
+      SaveXMMOps.push_back(DAG.getIntPtrConstant(
+                             FuncInfo->getRegSaveFrameIndex(), dl));
+      SaveXMMOps.push_back(DAG.getIntPtrConstant(
+                             FuncInfo->getVarArgsFPOffset(), dl));
+      SaveXMMOps.insert(SaveXMMOps.end(), LiveXMMRegs.begin(),
+                        LiveXMMRegs.end());
+      MemOps.push_back(DAG.getNode(X86ISD::VASTART_SAVE_XMM_REGS, dl,
+                                   MVT::Other, SaveXMMOps));
+    }
+
+    if (!MemOps.empty())
+      Chain = DAG.getNode(ISD::TokenFactor, dl, MVT::Other, MemOps);
+  }
+
+  if (isVarArg && MFI.hasMustTailInVarArgFunc()) {
+    // Find the largest legal vector type.
+    MVT VecVT = MVT::Other;
+    // FIXME: Only some x86_32 calling conventions support AVX512.
+    if (Subtarget.hasAVX512() &&
+        (Is64Bit || (CallConv == CallingConv::X86_VectorCall ||
+                     CallConv == CallingConv::Intel_OCL_BI)))
+      VecVT = MVT::v16f32;
+    else if (Subtarget.hasAVX())
+      VecVT = MVT::v8f32;
+    else if (Subtarget.hasSSE2())
+      VecVT = MVT::v4f32;
+
+    // We forward some GPRs and some vector types.
+    SmallVector<MVT, 2> RegParmTypes;
+    MVT IntVT = Is64Bit ? MVT::i64 : MVT::i32;
+    RegParmTypes.push_back(IntVT);
+    if (VecVT != MVT::Other)
+      RegParmTypes.push_back(VecVT);
+
+    // Compute the set of forwarded registers. The rest are scratch.
+    SmallVectorImpl<ForwardedRegister> &Forwards =
+        FuncInfo->getForwardedMustTailRegParms();
+    CCInfo.analyzeMustTailForwardedRegisters(Forwards, RegParmTypes, CC_X86);
+
+    // Conservatively forward AL on x86_64, since it might be used for varargs.
+    if (Is64Bit && !CCInfo.isAllocated(X86::AL)) {
+      unsigned ALVReg = MF.addLiveIn(X86::AL, &X86::GR8RegClass);
+      Forwards.push_back(ForwardedRegister(ALVReg, X86::AL, MVT::i8));
+    }
+
+    // Copy all forwards from physical to virtual registers.
+    for (ForwardedRegister &FR : Forwards) {
+      // FIXME: Can we use a less constrained schedule?
+      SDValue RegVal = DAG.getCopyFromReg(Chain, dl, FR.VReg, FR.VT);
+      FR.VReg = MF.getRegInfo().createVirtualRegister(getRegClassFor(FR.VT));
+      Chain = DAG.getCopyToReg(Chain, dl, FR.VReg, RegVal);
+    }
+  }
+
+  // Some CCs need callee pop.
+  if (X86::isCalleePop(CallConv, Is64Bit, isVarArg,
+                       MF.getTarget().Options.GuaranteedTailCallOpt)) {
+    FuncInfo->setBytesToPopOnReturn(StackSize); // Callee pops everything.
+  } else if (CallConv == CallingConv::X86_INTR && Ins.size() == 2) {
+    // X86 interrupts must pop the error code (and the alignment padding) if
+    // present.
+    FuncInfo->setBytesToPopOnReturn(Is64Bit ? 16 : 4);
+  } else {
+    FuncInfo->setBytesToPopOnReturn(0); // Callee pops nothing.
+    // If this is an sret function, the return should pop the hidden pointer.
+    if (!Is64Bit && !canGuaranteeTCO(CallConv) &&
+        !Subtarget.getTargetTriple().isOSMSVCRT() &&
+        argsAreStructReturn(Ins, Subtarget.isTargetMCU()) == StackStructReturn)
+      FuncInfo->setBytesToPopOnReturn(4);
+  }
+
+  if (!Is64Bit) {
+    // RegSaveFrameIndex is X86-64 only.
+    FuncInfo->setRegSaveFrameIndex(0xAAAAAAA);
+    if (CallConv == CallingConv::X86_FastCall ||
+        CallConv == CallingConv::X86_ThisCall)
+      // fastcc functions can't have varargs.
+      FuncInfo->setVarArgsFrameIndex(0xAAAAAAA);
+  }
+
+  FuncInfo->setArgumentStackSize(StackSize);
+
+//  if (WinEHFuncInfo *EHInfo = MF.getWinEHFuncInfo()) {
+//    EHPersonality Personality = classifyEHPersonality(F.getPersonalityFn());
+//    if (Personality == EHPersonality::CoreCLR) {
+//      assert(Is64Bit);
+//      // TODO: Add a mechanism to frame lowering that will allow us to indicate
+//      // that we'd prefer this slot be allocated towards the bottom of the frame
+//      // (i.e. near the stack pointer after allocating the frame).  Every
+//      // funclet needs a copy of this slot in its (mostly empty) frame, and the
+//      // offset from the bottom of this and each funclet's frame must be the
+//      // same, so the size of funclets' (mostly empty) frames is dictated by
+//      // how far this slot is from the bottom (since they allocate just enough
+//      // space to accommodate holding this slot at the correct offset).
+//      int PSPSymFI = MFI.CreateStackObject(8, 8, /*isSS=*/false);
+//      EHInfo->PSPSymFrameIdx = PSPSymFI;
+//    }
+//  }
+
+  if (CallConv == CallingConv::X86_RegCall
+      /*F.hasFnAttribute("no_caller_saved_registers")*/) {
+    MachineRegisterInfo &MRI = MF.getRegInfo();
+    for (std::pair<unsigned, unsigned> Pair : MRI.liveins())
+      MRI.disableCalleeSavedRegister(Pair.first);
+  }
+
+  return Chain;
+}
+
 SDValue X86TargetLowering::LowerMemOpCallTo(SDValue Chain, SDValue StackPtr,
                                             SDValue Arg, const SDLoc &dl,
                                             SelectionDAG &DAG,

@@ -225,6 +225,7 @@ public:
   /// frame pointer register. For most targets this is true only if the function
   /// has variable sized allocas or if frame pointer elimination is disabled.
   virtual bool hasFP(const MachineFunction &MF) const = 0;
+  virtual bool hasFPMEF(const MachineFunction &MF) const {return false;};
 
   /// hasReservedCallFrame - Under normal circumstances, when a frame pointer is
   /// not required, we reserve argument space for call sites in the function

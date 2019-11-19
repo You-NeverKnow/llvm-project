@@ -9299,6 +9299,7 @@ SelectionDAGBuilder::CopyValueToVirtualRegister(const Value *V, unsigned Reg) {
 }
 
 #include "llvm/CodeGen/SelectionDAGISel.h"
+#include "../../Target/X86/X86ISelLowering.h"
 
 /// isOnlyUsedInEntryBlock - If the specified argument is only used in the
 /// entry block, return true.  This includes arguments used by switches, since
@@ -10056,7 +10057,7 @@ void SelectionDAGISel::LowerArguments(const MEFEntry &E) {
 
   // Call the target to set up the argument values.
   SmallVector<SDValue, 8> InVals;
-  SDValue NewRoot = TLI->LowerFormalArguments(
+  SDValue NewRoot = TLI->LowerFormalArgumentsMEF(
       DAG.getRoot(), E.getCallingConv(), E.isVarArg(), Ins, dl, DAG, InVals);
 
   // Verify that the target's LowerFormalArguments behaved as expected.
@@ -10239,7 +10240,7 @@ void SelectionDAGISel::LowerArguments(const MEFEntry &E) {
   }
 
   // Finally, if the target has anything special to do, allow it to do so.
-  EmitFunctionEntryCode();
+  EmitFunctionEntryCodeMEF();
 }
 
 /// Handle PHI nodes in successor blocks.  Emit code into the SelectionDAG to

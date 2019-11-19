@@ -515,6 +515,11 @@ void MachineRegisterInfo::freezeReservedRegs(const MachineFunction &MF) {
   assert(ReservedRegs.size() == getTargetRegisterInfo()->getNumRegs() &&
          "Invalid ReservedRegs vector from target");
 }
+void MachineRegisterInfo::freezeReservedRegsMEF(const MachineFunction &MF) {
+  ReservedRegs = getTargetRegisterInfo()->getReservedRegsMEF(MF);
+  assert(ReservedRegs.size() == getTargetRegisterInfo()->getNumRegs() &&
+         "Invalid ReservedRegs vector from target");
+}
 
 bool MachineRegisterInfo::isConstantPhysReg(unsigned PhysReg) const {
   assert(TargetRegisterInfo::isPhysicalRegister(PhysReg));

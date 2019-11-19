@@ -118,10 +118,12 @@ public:
   /// should be considered unavailable at all times, e.g. SP, RA. This is used by
   /// register scavenger to determine what registers are free.
   BitVector getReservedRegs(const MachineFunction &MF) const override;
+  BitVector getReservedRegsMEF(const MachineFunction &MF) const override;
 
   void adjustStackMapLiveOutMask(uint32_t *Mask) const override;
 
   bool hasBasePointer(const MachineFunction &MF) const;
+  bool hasBasePointerMEF(const MachineFunction &MF) const;
 
   bool canRealignStack(const MachineFunction &MF) const override;
 
