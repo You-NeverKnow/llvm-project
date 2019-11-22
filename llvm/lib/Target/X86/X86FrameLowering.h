@@ -65,6 +65,7 @@ public:
   /// emitProlog/emitEpilog - These methods insert prolog and epilog code into
   /// the function.
   void emitPrologue(MachineFunction &MF, MachineBasicBlock &MBB) const override;
+  void emitPrologueMEF(MachineFunction &MF, MachineBasicBlock &MBB) const override;
   void emitEpilogue(MachineFunction &MF, MachineBasicBlock &MBB) const override;
 
   void adjustForSegmentedStacks(MachineFunction &MF,
@@ -75,9 +76,15 @@ public:
 
   void determineCalleeSaves(MachineFunction &MF, BitVector &SavedRegs,
                             RegScavenger *RS = nullptr) const override;
+  void determineCalleeSavesMEF(MachineFunction &MF, BitVector &SavedRegs,
+                            RegScavenger *RS = nullptr) const override;
 
   bool
   assignCalleeSavedSpillSlots(MachineFunction &MF,
+                              const TargetRegisterInfo *TRI,
+                              std::vector<CalleeSavedInfo> &CSI) const override;
+  bool
+  assignCalleeSavedSpillSlotsMEF(MachineFunction &MF,
                               const TargetRegisterInfo *TRI,
                               std::vector<CalleeSavedInfo> &CSI) const override;
 
@@ -178,6 +185,7 @@ public:
 
 private:
   uint64_t calculateMaxStackAlign(const MachineFunction &MF) const;
+  uint64_t calculateMaxStackAlignMEF(const MachineFunction &MF) const;
 
   /// Emit target stack probe as a call to a helper function
   void emitStackProbeCall(MachineFunction &MF, MachineBasicBlock &MBB,

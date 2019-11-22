@@ -83,6 +83,7 @@ public:
   /// runOnFunction - Prepare to answer questions about MF. This must be called
   /// before any other methods are used.
   void runOnMachineFunction(const MachineFunction &MF);
+  void runOnMachineFunctionMEF(const MachineFunction &MF);
 
   /// getNumAllocatableRegs - Returns the number of actually allocatable
   /// registers in RC in the current function.

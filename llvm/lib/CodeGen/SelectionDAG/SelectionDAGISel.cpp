@@ -2240,6 +2240,7 @@ void SelectionDAGISel::SelectAllBasicBlocks(const MEFBody &FnBody) {
 
   for (auto entry: mefEntries) {
       FuncInfo->MBB = FuncInfo->MBBMap[&entry->getEntryBlock()];
+      MF->getEntries().push_back(FuncInfo->MBB);
       FuncInfo->InsertPt = FuncInfo->MBB->begin();
 
       CurDAG->setFunctionLoweringInfo(FuncInfo);

@@ -179,6 +179,7 @@ namespace {
 
   private:
     bool runOnMachineFunction(MachineFunction &MF) override;
+    bool runOnMachineFunctionMEF(MachineFunction &MF) override;
 
     void allocateBasicBlock(MachineBasicBlock &MBB);
     void allocateInstruction(MachineInstr &MI);
@@ -1300,6 +1301,39 @@ bool RegAllocFast::runOnMachineFunction(MachineFunction &MF) {
   MFI = &MF.getFrameInfo();
   MRI->freezeReservedRegs(MF);
   RegClassInfo.runOnMachineFunction(MF);
+  UsedInInstr.clear();
+  UsedInInstr.setUniverse(TRI->getNumRegUnits());
+
+  // initialize the virtual->physical register map to have a 'null'
+  // mapping for all virtual registers
+  unsigned NumVirtRegs = MRI->getNumVirtRegs();
+  StackSlotForVirtReg.resize(NumVirtRegs);
+  LiveVirtRegs.setUniverse(NumVirtRegs);
+  MayLiveAcrossBlocks.clear();
+  MayLiveAcrossBlocks.resize(NumVirtRegs);
+
+  // Loop over all of the basic blocks, eliminating virtual register references
+  for (MachineBasicBlock &MBB : MF)
+    allocateBasicBlock(MBB);
+
+  // All machine operands and other references to virtual registers have been
+  // replaced. Remove the virtual registers.
+  MRI->clearVirtRegs();
+
+  StackSlotForVirtReg.clear();
+  LiveDbgValueMap.clear();
+  return true;
+}
+bool RegAllocFast::runOnMachineFunctionMEF(MachineFunction &MF) {
+  LLVM_DEBUG(dbgs() << "********** FAST REGISTER ALLOCATION **********\n"
+                    << "********** Function: " << MF.getName() << '\n');
+  MRI = &MF.getRegInfo();
+  const TargetSubtargetInfo &STI = MF.getSubtarget();
+  TRI = STI.getRegisterInfo();
+  TII = STI.getInstrInfo();
+  MFI = &MF.getFrameInfo();
+  MRI->freezeReservedRegsMEF(MF);
+  RegClassInfo.runOnMachineFunctionMEF(MF);
   UsedInInstr.clear();
   UsedInInstr.setUniverse(TRI->getNumRegUnits());
 

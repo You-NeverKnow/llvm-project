@@ -238,6 +238,7 @@ public:
   /// The function returns the updated CSR list (after taking into account
   /// registers that are disabled from the CSR list).
   const MCPhysReg *getCalleeSavedRegs() const;
+  const MCPhysReg *getCalleeSavedRegsMEF() const;
 
   /// Sets the updated Callee Saved Registers list.
   /// Notice that it will override ant previously disabled/saved CSRs.

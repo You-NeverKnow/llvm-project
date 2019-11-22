@@ -83,6 +83,49 @@ void RegisterClassInfo::runOnMachineFunction(const MachineFunction &mf) {
     ++Tag;
   }
 }
+void RegisterClassInfo::runOnMachineFunctionMEF(const MachineFunction &mf) {
+  bool Update = false;
+  MF = &mf;
+
+  // Allocate new array the first time we see a new target.
+  if (MF->getSubtarget().getRegisterInfo() != TRI) {
+    TRI = MF->getSubtarget().getRegisterInfo();
+    RegClass.reset(new RCInfo[TRI->getNumRegClasses()]);
+    Update = true;
+  }
+
+  // Does this MF have different CSRs?
+  assert(TRI && "no register info set");
+
+  // Get the callee saved registers.
+  const MCPhysReg *CSR = MF->getRegInfo().getCalleeSavedRegsMEF();
+  if (Update || CSR != CalleeSavedRegs) {
+    // Build a CSRAlias map. Every CSR alias saves the last
+    // overlapping CSR.
+    CalleeSavedAliases.resize(TRI->getNumRegs(), 0);
+    for (const MCPhysReg *I = CSR; *I; ++I)
+      for (MCRegAliasIterator AI(*I, TRI, true); AI.isValid(); ++AI)
+        CalleeSavedAliases[*AI] = *I;
+
+    Update = true;
+  }
+  CalleeSavedRegs = CSR;
+
+  // Different reserved registers?
+  const BitVector &RR = MF->getRegInfo().getReservedRegs();
+  if (Reserved.size() != RR.size() || RR != Reserved) {
+    Update = true;
+    Reserved = RR;
+  }
+
+  // Invalidate cached information from previous function.
+  if (Update) {
+    unsigned NumPSets = TRI->getNumRegPressureSets();
+    PSetLimits.reset(new unsigned[NumPSets]);
+    std::fill(&PSetLimits[0], &PSetLimits[NumPSets], 0);
+    ++Tag;
+  }
+}
 
 /// compute - Compute the preferred allocation order for RC with reserved
 /// registers filtered out. Volatile registers come first followed by CSR
@@ -115,16 +158,22 @@ void RegisterClassInfo::compute(const TargetRegisterClass *RC) const {
     unsigned Cost = TRI->getCostPerUse(PhysReg);
     MinCost = std::min(MinCost, Cost);
 
-    if (CalleeSavedAliases[PhysReg] &&
-        !STI.ignoreCSRForAllocationOrder(*MF, PhysReg))
-      // PhysReg aliases a CSR, save it for later.
-      CSRAlias.push_back(PhysReg);
-    else {
-      if (Cost != LastCost)
-        LastCostChange = N;
-      RCI.Order[N++] = PhysReg;
-      LastCost = Cost;
-    }
+      if (CalleeSavedAliases[PhysReg]) {
+          if (!STI.ignoreCSRForAllocationOrder(*MF, PhysReg))
+              // PhysReg aliases a CSR, save it for later.
+              CSRAlias.push_back(PhysReg);
+          else {
+              if (Cost != LastCost)
+                  LastCostChange = N;
+              RCI.Order[N++] = PhysReg;
+              LastCost = Cost;
+          }
+      } else {
+          if (Cost != LastCost)
+              LastCostChange = N;
+          RCI.Order[N++] = PhysReg;
+          LastCost = Cost;
+      }
   }
   RCI.NumRegs = N + CSRAlias.size();
   assert(RCI.NumRegs <= NumRegs && "Allocation order larger than regclass");

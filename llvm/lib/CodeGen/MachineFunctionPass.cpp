@@ -139,7 +139,7 @@ bool MachineFunctionPass::runOnFunctionMEF(MEFBody &B) {
 
   bool RV = runOnMachineFunctionMEF(MF);
     // debug
-    std::cout << "Successfully ran MF: " << (std::string) MF.getName() << '\n';
+    std::cout << "MEF pass: " << (std::string) this->getPassName() << ": " << RV << '\n';
 
 //  if (ShouldEmitSizeRemarks) {
 //    // We wanted size remarks. Check if there was a change to the number of

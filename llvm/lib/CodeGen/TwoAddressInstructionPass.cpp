@@ -192,7 +192,8 @@ public:
   }
 
   /// Pass entry point.
-  bool runOnMachineFunction(MachineFunction&) override;
+  bool runOnMachineFunction(MachineFunction& f) override;
+  bool runOnMachineFunctionMEF(MachineFunction& f) override;
 };
 
 } // end anonymous namespace
@@ -1686,6 +1687,127 @@ bool TwoAddressInstructionPass::runOnMachineFunction(MachineFunction &Func) {
   // fixups are necessary for correctness.
   if (skipFunction(Func.getFunction()))
     OptLevel = CodeGenOpt::None;
+
+  bool MadeChange = false;
+
+  LLVM_DEBUG(dbgs() << "********** REWRITING TWO-ADDR INSTRS **********\n");
+  LLVM_DEBUG(dbgs() << "********** Function: " << MF->getName() << '\n');
+
+  // This pass takes the function out of SSA form.
+  MRI->leaveSSA();
+
+  TiedOperandMap TiedOperands;
+  for (MachineFunction::iterator MBBI = MF->begin(), MBBE = MF->end();
+       MBBI != MBBE; ++MBBI) {
+    MBB = &*MBBI;
+    unsigned Dist = 0;
+    DistanceMap.clear();
+    SrcRegMap.clear();
+    DstRegMap.clear();
+    Processed.clear();
+    SunkInstrs.clear();
+    for (MachineBasicBlock::iterator mi = MBB->begin(), me = MBB->end();
+         mi != me; ) {
+      MachineBasicBlock::iterator nmi = std::next(mi);
+      // Don't revisit an instruction previously converted by target. It may
+      // contain undef register operands (%noreg), which are not handled.
+      if (mi->isDebugInstr() || SunkInstrs.count(&*mi)) {
+        mi = nmi;
+        continue;
+      }
+
+      // Expand REG_SEQUENCE instructions. This will position mi at the first
+      // expanded instruction.
+      if (mi->isRegSequence())
+        eliminateRegSequence(mi);
+
+      DistanceMap.insert(std::make_pair(&*mi, ++Dist));
+
+      processCopy(&*mi);
+
+      // First scan through all the tied register uses in this instruction
+      // and record a list of pairs of tied operands for each register.
+      if (!collectTiedOperands(&*mi, TiedOperands)) {
+        mi = nmi;
+        continue;
+      }
+
+      ++NumTwoAddressInstrs;
+      MadeChange = true;
+      LLVM_DEBUG(dbgs() << '\t' << *mi);
+
+      // If the instruction has a single pair of tied operands, try some
+      // transformations that may either eliminate the tied operands or
+      // improve the opportunities for coalescing away the register copy.
+      if (TiedOperands.size() == 1) {
+        SmallVectorImpl<std::pair<unsigned, unsigned>> &TiedPairs
+          = TiedOperands.begin()->second;
+        if (TiedPairs.size() == 1) {
+          unsigned SrcIdx = TiedPairs[0].first;
+          unsigned DstIdx = TiedPairs[0].second;
+          unsigned SrcReg = mi->getOperand(SrcIdx).getReg();
+          unsigned DstReg = mi->getOperand(DstIdx).getReg();
+          if (SrcReg != DstReg &&
+              tryInstructionTransform(mi, nmi, SrcIdx, DstIdx, Dist, false)) {
+            // The tied operands have been eliminated or shifted further down
+            // the block to ease elimination. Continue processing with 'nmi'.
+            TiedOperands.clear();
+            mi = nmi;
+            continue;
+          }
+        }
+      }
+
+      // Now iterate over the information collected above.
+      for (auto &TO : TiedOperands) {
+        processTiedPairs(&*mi, TO.second, Dist);
+        LLVM_DEBUG(dbgs() << "\t\trewrite to:\t" << *mi);
+      }
+
+      // Rewrite INSERT_SUBREG as COPY now that we no longer need SSA form.
+      if (mi->isInsertSubreg()) {
+        // From %reg = INSERT_SUBREG %reg, %subreg, subidx
+        // To   %reg:subidx = COPY %subreg
+        unsigned SubIdx = mi->getOperand(3).getImm();
+        mi->RemoveOperand(3);
+        assert(mi->getOperand(0).getSubReg() == 0 && "Unexpected subreg idx");
+        mi->getOperand(0).setSubReg(SubIdx);
+        mi->getOperand(0).setIsUndef(mi->getOperand(1).isUndef());
+        mi->RemoveOperand(1);
+        mi->setDesc(TII->get(TargetOpcode::COPY));
+        LLVM_DEBUG(dbgs() << "\t\tconvert to:\t" << *mi);
+      }
+
+      // Clear TiedOperands here instead of at the top of the loop
+      // since most instructions do not have tied operands.
+      TiedOperands.clear();
+      mi = nmi;
+    }
+  }
+
+  if (LIS)
+    MF->verify(this, "After two-address instruction pass");
+
+  return MadeChange;
+}
+bool TwoAddressInstructionPass::runOnMachineFunctionMEF(MachineFunction &Func) {
+  MF = &Func;
+  const TargetMachine &TM = MF->getTarget();
+  MRI = &MF->getRegInfo();
+  TII = MF->getSubtarget().getInstrInfo();
+  TRI = MF->getSubtarget().getRegisterInfo();
+  InstrItins = MF->getSubtarget().getInstrItineraryData();
+  LV = getAnalysisIfAvailable<LiveVariables>();
+  LIS = getAnalysisIfAvailable<LiveIntervals>();
+  if (auto *AAPass = getAnalysisIfAvailable<AAResultsWrapperPass>())
+    AA = &AAPass->getAAResults();
+  else
+    AA = nullptr;
+  OptLevel = TM.getOptLevel();
+  // Disable optimizations if requested. We cannot skip the whole pass as some
+  // fixups are necessary for correctness.
+//  if (skipFunction(Func.getFunction()))
+//    OptLevel = CodeGenOpt::None;
 
   bool MadeChange = false;
 

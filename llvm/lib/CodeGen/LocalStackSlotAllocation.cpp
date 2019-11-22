@@ -94,6 +94,9 @@ namespace {
     }
 
     bool runOnMachineFunction(MachineFunction &MF) override;
+    bool runOnMachineFunctionMEF(MachineFunction &MF) override {
+        return runOnMachineFunction(MF);
+    };
 
     void getAnalysisUsage(AnalysisUsage &AU) const override {
       AU.setPreservesCFG();

@@ -108,6 +108,7 @@ public:
   /// certain conditions (e.g. stack was adjusted before function \p MF
   /// was called).
   virtual unsigned getStackAlignmentSkew(const MachineFunction &MF) const;
+  virtual unsigned getStackAlignmentSkewMEF(const MachineFunction &MF) const;
 
   /// getOffsetOfLocalArea - This method returns the offset of the local area
   /// from the stack pointer on entrance to a function.
@@ -127,6 +128,12 @@ public:
   /// CSI.
   virtual bool
   assignCalleeSavedSpillSlots(MachineFunction &MF,
+                              const TargetRegisterInfo *TRI,
+                              std::vector<CalleeSavedInfo> &CSI) const {
+    return false;
+  }
+  virtual bool
+  assignCalleeSavedSpillSlotsMEF(MachineFunction &MF,
                               const TargetRegisterInfo *TRI,
                               std::vector<CalleeSavedInfo> &CSI) const {
     return false;
@@ -174,6 +181,8 @@ public:
   /// the function.
   virtual void emitPrologue(MachineFunction &MF,
                             MachineBasicBlock &MBB) const = 0;
+  virtual void emitPrologueMEF(MachineFunction &MF,
+                            MachineBasicBlock &MBB) const {};
   virtual void emitEpilogue(MachineFunction &MF,
                             MachineBasicBlock &MBB) const = 0;
 
@@ -291,6 +300,8 @@ public:
   /// register or a frameindex available.
   virtual void determineCalleeSaves(MachineFunction &MF, BitVector &SavedRegs,
                                     RegScavenger *RS = nullptr) const;
+  virtual void determineCalleeSavesMEF(MachineFunction &MF, BitVector &SavedRegs,
+                                    RegScavenger *RS = nullptr) const;
 
   /// processFunctionBeforeFrameFinalized - This method is called immediately
   /// before the specified function's frame layout (MF.getFrameInfo()) is
@@ -376,6 +387,17 @@ public:
       if (auto CS = ImmutableCallSite(U))
         if (CS.isTailCall())
           return false;
+    return true;
+  }
+  static bool isSafeForNoCSROptMEF(const MEFBody &B) {
+//    if (!F.hasLocalLinkage() || F.hasAddressTaken() ||
+//        !F.hasFnAttribute(Attribute::NoRecurse))
+//      return false;
+//    // Function should not be optimized as tail call.
+//    for (const User *U : F.users())
+//      if (auto CS = ImmutableCallSite(U))
+//        if (CS.isTailCall())
+//          return false;
     return true;
   }
 

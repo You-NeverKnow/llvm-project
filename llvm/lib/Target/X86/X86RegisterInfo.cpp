@@ -391,6 +391,121 @@ X86RegisterInfo::getCalleeSavedRegs(const MachineFunction *MF) const {
 
   return CallsEHReturn ? CSR_32EHRet_SaveList : CSR_32_SaveList;
 }
+const MCPhysReg *
+X86RegisterInfo::getCalleeSavedRegsMEF(const MachineFunction *MF) const {
+  assert(MF && "MachineFunction required");
+
+  const X86Subtarget &Subtarget = MF->getSubtarget<X86Subtarget>();
+//  const MEFBody &F = MF->getFunction();
+  bool HasSSE = Subtarget.hasSSE1();
+  bool HasAVX = Subtarget.hasAVX();
+  bool HasAVX512 = Subtarget.hasAVX512();
+  bool CallsEHReturn = MF->callsEHReturn();
+
+  CallingConv::ID CC = /*F.getCallingConv()*/ CallingConv::C;
+
+  // If attribute NoCallerSavedRegisters exists then we set X86_INTR calling
+  // convention because it has the CSR list.
+//  if (MF->getFunction().hasFnAttribute("no_caller_saved_registers"))
+//    CC = CallingConv::X86_INTR;
+
+  switch (CC) {
+  case CallingConv::GHC:
+  case CallingConv::HiPE:
+    return CSR_NoRegs_SaveList;
+  case CallingConv::AnyReg:
+    if (HasAVX)
+      return CSR_64_AllRegs_AVX_SaveList;
+    return CSR_64_AllRegs_SaveList;
+  case CallingConv::PreserveMost:
+    return CSR_64_RT_MostRegs_SaveList;
+  case CallingConv::PreserveAll:
+    if (HasAVX)
+      return CSR_64_RT_AllRegs_AVX_SaveList;
+    return CSR_64_RT_AllRegs_SaveList;
+  case CallingConv::CXX_FAST_TLS:
+    if (Is64Bit)
+      return MF->getInfo<X86MachineFunctionInfo>()->isSplitCSR() ?
+             CSR_64_CXX_TLS_Darwin_PE_SaveList : CSR_64_TLS_Darwin_SaveList;
+    break;
+  case CallingConv::Intel_OCL_BI: {
+    if (HasAVX512 && IsWin64)
+      return CSR_Win64_Intel_OCL_BI_AVX512_SaveList;
+    if (HasAVX512 && Is64Bit)
+      return CSR_64_Intel_OCL_BI_AVX512_SaveList;
+    if (HasAVX && IsWin64)
+      return CSR_Win64_Intel_OCL_BI_AVX_SaveList;
+    if (HasAVX && Is64Bit)
+      return CSR_64_Intel_OCL_BI_AVX_SaveList;
+    if (!HasAVX && !IsWin64 && Is64Bit)
+      return CSR_64_Intel_OCL_BI_SaveList;
+    break;
+  }
+  case CallingConv::HHVM:
+    return CSR_64_HHVM_SaveList;
+  case CallingConv::X86_RegCall:
+    if (Is64Bit) {
+      if (IsWin64) {
+        return (HasSSE ? CSR_Win64_RegCall_SaveList :
+                         CSR_Win64_RegCall_NoSSE_SaveList);
+      } else {
+        return (HasSSE ? CSR_SysV64_RegCall_SaveList :
+                         CSR_SysV64_RegCall_NoSSE_SaveList);
+      }
+    } else {
+      return (HasSSE ? CSR_32_RegCall_SaveList :
+                       CSR_32_RegCall_NoSSE_SaveList);
+    }
+  case CallingConv::Cold:
+    if (Is64Bit)
+      return CSR_64_MostRegs_SaveList;
+    break;
+  case CallingConv::Win64:
+    if (!HasSSE)
+      return CSR_Win64_NoSSE_SaveList;
+    return CSR_Win64_SaveList;
+  case CallingConv::X86_64_SysV:
+    if (CallsEHReturn)
+      return CSR_64EHRet_SaveList;
+    return CSR_64_SaveList;
+  case CallingConv::X86_INTR:
+    if (Is64Bit) {
+      if (HasAVX512)
+        return CSR_64_AllRegs_AVX512_SaveList;
+      if (HasAVX)
+        return CSR_64_AllRegs_AVX_SaveList;
+      if (HasSSE)
+        return CSR_64_AllRegs_SaveList;
+      return CSR_64_AllRegs_NoSSE_SaveList;
+    } else {
+      if (HasAVX512)
+        return CSR_32_AllRegs_AVX512_SaveList;
+      if (HasAVX)
+        return CSR_32_AllRegs_AVX_SaveList;
+      if (HasSSE)
+        return CSR_32_AllRegs_SSE_SaveList;
+      return CSR_32_AllRegs_SaveList;
+    }
+  default:
+    break;
+  }
+
+  if (Is64Bit) {
+    bool IsSwiftCC = /*Subtarget.getTargetLowering()->supportSwiftError() &&
+                     F.getAttributes().hasAttrSomewhere(Attribute::SwiftError)*/ false;
+    if (IsSwiftCC)
+      return IsWin64 ? CSR_Win64_SwiftError_SaveList
+                     : CSR_64_SwiftError_SaveList;
+
+    if (IsWin64)
+      return HasSSE ? CSR_Win64_SaveList : CSR_Win64_NoSSE_SaveList;
+    if (CallsEHReturn)
+      return CSR_64EHRet_SaveList;
+    return CSR_64_SaveList;
+  }
+
+  return CallsEHReturn ? CSR_32EHRet_SaveList : CSR_32_SaveList;
+}
 
 const MCPhysReg *X86RegisterInfo::getCalleeSavedRegsViaCopy(
     const MachineFunction *MF) const {

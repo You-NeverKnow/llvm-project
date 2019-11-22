@@ -460,6 +460,11 @@ public:
   ///         getCalleeSavedRegs that is implemented in MachineRegisterInfo.
   virtual const MCPhysReg*
   getCalleeSavedRegs(const MachineFunction *MF) const = 0;
+  virtual const MCPhysReg*
+  getCalleeSavedRegsMEF(const MachineFunction *MF) const {
+      // :TODO: :: default so code compiles while we implement proof of concept for x86
+      return getCalleeSavedRegs(MF);
+  };
 
   /// Return a mask of call-preserved registers for the given calling convention
   /// on the current function. The mask should include all call-preserved

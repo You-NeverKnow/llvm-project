@@ -645,6 +645,12 @@ const MCPhysReg *MachineRegisterInfo::getCalleeSavedRegs() const {
 
   return getTargetRegisterInfo()->getCalleeSavedRegs(MF);
 }
+const MCPhysReg *MachineRegisterInfo::getCalleeSavedRegsMEF() const {
+  if (IsUpdatedCSRsInitialized)
+    return UpdatedCSRs.data();
+
+  return getTargetRegisterInfo()->getCalleeSavedRegsMEF(MF);
+}
 
 void MachineRegisterInfo::setCalleeSavedRegs(ArrayRef<MCPhysReg> CSRs) {
   if (IsUpdatedCSRsInitialized)

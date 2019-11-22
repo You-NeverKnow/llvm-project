@@ -222,6 +222,7 @@ struct LandingPadInfo {
 class MachineFunction {
   const Function *F;
   const MEFBody *B;
+  std::vector<MachineBasicBlock *> Entries;
   const LLVMTargetMachine &Target;
   const TargetSubtargetInfo *STI;
   MCContext &Ctx;
@@ -459,6 +460,7 @@ public:
   /// Return the LLVM function that this machine code represents
   const Function &getFunction() const { return *F; }
   const MEFBody *getFunctionMEF() const { return B; }
+  std::vector<MachineBasicBlock *> &getEntries() { return Entries; }
 
   /// getName - Return the name of the corresponding LLVM function.
   StringRef getName() const;

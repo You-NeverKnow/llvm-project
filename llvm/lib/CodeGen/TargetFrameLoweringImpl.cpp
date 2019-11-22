@@ -107,6 +107,54 @@ void TargetFrameLowering::determineCalleeSaves(MachineFunction &MF,
       SavedRegs.set(Reg);
   }
 }
+void TargetFrameLowering::determineCalleeSavesMEF(MachineFunction &MF,
+                                               BitVector &SavedRegs,
+                                               RegScavenger *RS) const {
+  const TargetRegisterInfo &TRI = *MF.getSubtarget().getRegisterInfo();
+
+  // Resize before the early returns. Some backends expect that
+  // SavedRegs.size() == TRI.getNumRegs() after this call even if there are no
+  // saved registers.
+  SavedRegs.resize(TRI.getNumRegs());
+
+  // When interprocedural register allocation is enabled caller saved registers
+  // are preferred over callee saved registers.
+  if (MF.getTarget().Options.EnableIPRA && isSafeForNoCSROptMEF(*MF.getFunctionMEF()))
+    return;
+
+  // Get the callee saved register list...
+  const MCPhysReg *CSRegs = MF.getRegInfo().getCalleeSavedRegsMEF();
+
+  // Early exit if there are no callee saved registers.
+  if (!CSRegs || CSRegs[0] == 0)
+    return;
+
+  // In Naked functions we aren't going to save any registers.
+//  if (MF.getFunction().hasFnAttribute(Attribute::Naked))
+//    return;
+
+  // Noreturn+nounwind functions never restore CSR, so no saves are needed.
+  // Purely noreturn functions may still return through throws, so those must
+  // save CSR for caller exception handlers.
+  //
+  // If the function uses longjmp to break out of its current path of
+  // execution we do not need the CSR spills either: setjmp stores all CSRs
+  // it was called with into the jmp_buf, which longjmp then restores.
+//  if (MF.getFunction().hasFnAttribute(Attribute::NoReturn) &&
+//        MF.getFunction().hasFnAttribute(Attribute::NoUnwind) &&
+//        !MF.getFunction().hasFnAttribute(Attribute::UWTable) &&
+//        enableCalleeSaveSkip(MF))
+//    return;
+
+  // Functions which call __builtin_unwind_init get all their registers saved.
+  bool CallsUnwindInit = MF.callsUnwindInit();
+  const MachineRegisterInfo &MRI = MF.getRegInfo();
+  for (unsigned i = 0; CSRegs[i]; ++i) {
+    unsigned Reg = CSRegs[i];
+    if (CallsUnwindInit || MRI.isPhysRegModified(Reg))
+      SavedRegs.set(Reg);
+  }
+}
 
 unsigned TargetFrameLowering::getStackAlignmentSkew(
     const MachineFunction &MF) const {
@@ -114,6 +162,15 @@ unsigned TargetFrameLowering::getStackAlignmentSkew(
   // is removed from the stack before we enter the function.
   if (LLVM_UNLIKELY(MF.getFunction().getCallingConv() == CallingConv::HHVM))
     return MF.getTarget().getAllocaPointerSize();
+
+  return 0;
+}
+unsigned TargetFrameLowering::getStackAlignmentSkewMEF(
+    const MachineFunction &MF) const {
+  // When HHVM function is called, the stack is skewed as the return address
+  // is removed from the stack before we enter the function.
+//  if (LLVM_UNLIKELY(MF.getFunction().getCallingConv() == CallingConv::HHVM))
+//    return MF.getTarget().getAllocaPointerSize();
 
   return 0;
 }

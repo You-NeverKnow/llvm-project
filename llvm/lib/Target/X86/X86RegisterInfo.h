@@ -104,6 +104,8 @@ public:
   const MCPhysReg *
   getCalleeSavedRegs(const MachineFunction* MF) const override;
   const MCPhysReg *
+  getCalleeSavedRegsMEF(const MachineFunction* MF) const override;
+  const MCPhysReg *
   getCalleeSavedRegsViaCopy(const MachineFunction *MF) const;
   const uint32_t *getCallPreservedMask(const MachineFunction &MF,
                                        CallingConv::ID) const override;
