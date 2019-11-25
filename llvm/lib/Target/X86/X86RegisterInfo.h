@@ -135,9 +135,13 @@ public:
   void eliminateFrameIndex(MachineBasicBlock::iterator MI,
                            int SPAdj, unsigned FIOperandNum,
                            RegScavenger *RS = nullptr) const override;
+  void eliminateFrameIndexMEF(MachineBasicBlock::iterator MI,
+                           int SPAdj, unsigned FIOperandNum,
+                           RegScavenger *RS = nullptr) const override;
 
   // Debug information queries.
   Register getFrameRegister(const MachineFunction &MF) const override;
+  Register getFrameRegisterMEF(const MachineFunction &MF) const override;
   unsigned getPtrSizedFrameRegister(const MachineFunction &MF) const;
   unsigned getPtrSizedStackRegister(const MachineFunction &MF) const;
   Register getStackRegister() const { return StackPtr; }

@@ -131,7 +131,10 @@ private:
   void calculateFrameObjectOffsets(MachineFunction &MF);
   void calculateFrameObjectOffsetsMEF(MachineFunction &MF);
   void replaceFrameIndices(MachineFunction &MF);
+  void replaceFrameIndicesMEF(MachineFunction &MF);
   void replaceFrameIndices(MachineBasicBlock *BB, MachineFunction &MF,
+                           int &SPAdj);
+  void replaceFrameIndicesMEF(MachineBasicBlock *BB, MachineFunction &MF,
                            int &SPAdj);
   void insertPrologEpilogCode(MachineFunction &MF);
   void insertPrologEpilogCodeMEF(MachineFunction &MF);
@@ -346,7 +349,7 @@ bool PEI::runOnMachineFunctionMEF(MachineFunction &MF) {
   // Replace all MO_FrameIndex operands with physical register references
   // and actual offsets.
   //
-  replaceFrameIndices(MF);
+  replaceFrameIndicesMEF(MF);
 
   // If register scavenging is needed, as we've enabled doing it as a
   // post-pass, scavenge the virtual registers that frame index elimination
@@ -1672,7 +1675,6 @@ void PEI::insertPrologEpilogCodeMEF(MachineFunction &MF) {
   // Add prologue to the function...
   for (MachineBasicBlock *SaveBlock : SaveBlocks)
     TFI.emitPrologueMEF(MF, *SaveBlock);
-
   // Add epilogue to restore the callee-save registers in each exiting block.
   for (MachineBasicBlock *RestoreBlock : RestoreBlocks)
     TFI.emitEpilogue(MF, *RestoreBlock);
@@ -1684,7 +1686,10 @@ void PEI::insertPrologEpilogCodeMEF(MachineFunction &MF) {
   // we've been asked for it.  This, when linked with a runtime with support
   // for segmented stacks (libgcc is one), will result in allocating stack
   // space in small chunks instead of one large contiguous block.
-  if (MF.shouldSplitStack()) {
+    // debug
+    std::cout << "inlline done" << '\n';
+
+    if (MF.shouldSplitStackMEF()) {
     for (MachineBasicBlock *SaveBlock : SaveBlocks)
       TFI.adjustForSegmentedStacks(MF, *SaveBlock);
     // Record that there are split-stack functions, so we will emit a
@@ -1698,9 +1703,9 @@ void PEI::insertPrologEpilogCodeMEF(MachineFunction &MF) {
   // approach is rather similar to that of Segmented Stacks, but it uses a
   // different conditional check and another BIF for allocating more stack
   // space.
-  if (MF.getFunction().getCallingConv() == CallingConv::HiPE)
-    for (MachineBasicBlock *SaveBlock : SaveBlocks)
-      TFI.adjustForHiPEPrologue(MF, *SaveBlock);
+//  if (MF.getFunction().getCallingConv() == CallingConv::HiPE)
+//    for (MachineBasicBlock *SaveBlock : SaveBlocks)
+//      TFI.adjustForHiPEPrologue(MF, *SaveBlock);
 }
 
 /// replaceFrameIndices - Replace all MO_FrameIndex operands with physical
@@ -1745,6 +1750,48 @@ void PEI::replaceFrameIndices(MachineFunction &MF) {
       continue;
     int SPAdj = 0;
     replaceFrameIndices(&BB, MF, SPAdj);
+  }
+}
+void PEI::replaceFrameIndicesMEF(MachineFunction &MF) {
+  const auto &ST = MF.getSubtarget();
+  const TargetFrameLowering &TFI = *ST.getFrameLowering();
+  if (!TFI.needsFrameIndexResolution(MF))
+    return;
+
+  const TargetRegisterInfo *TRI = ST.getRegisterInfo();
+
+  // Allow the target to determine this after knowing the frame size.
+  FrameIndexEliminationScavenging = (RS && !FrameIndexVirtualScavenging) ||
+    TRI->requiresFrameIndexReplacementScavenging(MF);
+
+  // Store SPAdj at exit of a basic block.
+  SmallVector<int, 8> SPState;
+  SPState.resize(MF.getNumBlockIDs());
+  df_iterator_default_set<MachineBasicBlock*> Reachable;
+
+  // Iterate over the reachable blocks in DFS order.
+  for (auto DFI = df_ext_begin(&MF, Reachable), DFE = df_ext_end(&MF, Reachable);
+       DFI != DFE; ++DFI) {
+    int SPAdj = 0;
+    // Check the exit state of the DFS stack predecessor.
+    if (DFI.getPathLength() >= 2) {
+      MachineBasicBlock *StackPred = DFI.getPath(DFI.getPathLength() - 2);
+      assert(Reachable.count(StackPred) &&
+             "DFS stack predecessor is already visited.\n");
+      SPAdj = SPState[StackPred->getNumber()];
+    }
+    MachineBasicBlock *BB = *DFI;
+    replaceFrameIndicesMEF(BB, MF, SPAdj);
+    SPState[BB->getNumber()] = SPAdj;
+  }
+
+  // Handle the unreachable blocks.
+  for (auto &BB : MF) {
+    if (Reachable.count(&BB))
+      // Already handled in DFS traversal.
+      continue;
+    int SPAdj = 0;
+    replaceFrameIndicesMEF(&BB, MF, SPAdj);
   }
 }
 
@@ -1850,6 +1897,137 @@ void PEI::replaceFrameIndices(MachineBasicBlock *BB, MachineFunction &MF,
       // use that target machine register info object to eliminate
       // it.
       TRI.eliminateFrameIndex(MI, SPAdj, i,
+                              FrameIndexEliminationScavenging ?  RS : nullptr);
+
+      // Reset the iterator if we were at the beginning of the BB.
+      if (AtBeginning) {
+        I = BB->begin();
+        DoIncr = false;
+      }
+
+      DidFinishLoop = false;
+      break;
+    }
+
+    // If we are looking at a call sequence, we need to keep track of
+    // the SP adjustment made by each instruction in the sequence.
+    // This includes both the frame setup/destroy pseudos (handled above),
+    // as well as other instructions that have side effects w.r.t the SP.
+    // Note that this must come after eliminateFrameIndex, because
+    // if I itself referred to a frame index, we shouldn't count its own
+    // adjustment.
+    if (DidFinishLoop && InsideCallSequence)
+      SPAdj += TII.getSPAdjust(MI);
+
+    if (DoIncr && I != BB->end()) ++I;
+
+    // Update register states.
+    if (RS && FrameIndexEliminationScavenging && DidFinishLoop)
+      RS->forward(MI);
+  }
+}
+void PEI::replaceFrameIndicesMEF(MachineBasicBlock *BB, MachineFunction &MF,
+                              int &SPAdj) {
+  assert(MF.getSubtarget().getRegisterInfo() &&
+         "getRegisterInfo() must be implemented!");
+  const TargetInstrInfo &TII = *MF.getSubtarget().getInstrInfo();
+  const TargetRegisterInfo &TRI = *MF.getSubtarget().getRegisterInfo();
+  const TargetFrameLowering *TFI = MF.getSubtarget().getFrameLowering();
+
+  if (RS && FrameIndexEliminationScavenging)
+    RS->enterBasicBlock(*BB);
+
+  bool InsideCallSequence = false;
+
+  for (MachineBasicBlock::iterator I = BB->begin(); I != BB->end(); ) {
+    if (TII.isFrameInstr(*I)) {
+      InsideCallSequence = TII.isFrameSetup(*I);
+      SPAdj += TII.getSPAdjust(*I);
+      I = TFI->eliminateCallFramePseudoInstr(MF, *BB, I);
+      continue;
+    }
+
+    MachineInstr &MI = *I;
+    bool DoIncr = true;
+    bool DidFinishLoop = true;
+    for (unsigned i = 0, e = MI.getNumOperands(); i != e; ++i) {
+      if (!MI.getOperand(i).isFI())
+        continue;
+
+      // Frame indices in debug values are encoded in a target independent
+      // way with simply the frame index and offset rather than any
+      // target-specific addressing mode.
+      if (MI.isDebugValue()) {
+        assert(i == 0 && "Frame indices can only appear as the first "
+                         "operand of a DBG_VALUE machine instruction");
+        unsigned Reg;
+        unsigned FrameIdx = MI.getOperand(0).getIndex();
+        unsigned Size = MF.getFrameInfo().getObjectSize(FrameIdx);
+
+        int64_t Offset =
+            TFI->getFrameIndexReference(MF, FrameIdx, Reg);
+        MI.getOperand(0).ChangeToRegister(Reg, false /*isDef*/);
+        MI.getOperand(0).setIsDebug();
+
+        const DIExpression *DIExpr = MI.getDebugExpression();
+
+        // If we have a direct DBG_VALUE, and its location expression isn't
+        // currently complex, then adding an offset will morph it into a
+        // complex location that is interpreted as being a memory address.
+        // This changes a pointer-valued variable to dereference that pointer,
+        // which is incorrect. Fix by adding DW_OP_stack_value.
+        unsigned PrependFlags = DIExpression::ApplyOffset;
+        if (!MI.isIndirectDebugValue() && !DIExpr->isComplex())
+          PrependFlags |= DIExpression::StackValue;
+
+        // If we have DBG_VALUE that is indirect and has a Implicit location
+        // expression need to insert a deref before prepending a Memory
+        // location expression. Also after doing this we change the DBG_VALUE
+        // to be direct.
+        if (MI.isIndirectDebugValue() && DIExpr->isImplicit()) {
+          SmallVector<uint64_t, 2> Ops = {dwarf::DW_OP_deref_size, Size};
+          bool WithStackValue = true;
+          DIExpr = DIExpression::prependOpcodes(DIExpr, Ops, WithStackValue);
+          // Make the DBG_VALUE direct.
+          MI.getOperand(1).ChangeToRegister(0, false);
+        }
+        DIExpr = DIExpression::prepend(DIExpr, PrependFlags, Offset);
+        MI.getOperand(3).setMetadata(DIExpr);
+        continue;
+      }
+
+      // TODO: This code should be commoned with the code for
+      // PATCHPOINT. There's no good reason for the difference in
+      // implementation other than historical accident.  The only
+      // remaining difference is the unconditional use of the stack
+      // pointer as the base register.
+      if (MI.getOpcode() == TargetOpcode::STATEPOINT) {
+        assert((!MI.isDebugValue() || i == 0) &&
+               "Frame indicies can only appear as the first operand of a "
+               "DBG_VALUE machine instruction");
+        unsigned Reg;
+        MachineOperand &Offset = MI.getOperand(i + 1);
+        int refOffset = TFI->getFrameIndexReferencePreferSP(
+            MF, MI.getOperand(i).getIndex(), Reg, /*IgnoreSPUpdates*/ false);
+        Offset.setImm(Offset.getImm() + refOffset + SPAdj);
+        MI.getOperand(i).ChangeToRegister(Reg, false /*isDef*/);
+        continue;
+      }
+
+      // Some instructions (e.g. inline asm instructions) can have
+      // multiple frame indices and/or cause eliminateFrameIndex
+      // to insert more than one instruction. We need the register
+      // scavenger to go through all of these instructions so that
+      // it can update its register information. We keep the
+      // iterator at the point before insertion so that we can
+      // revisit them in full.
+      bool AtBeginning = (I == BB->begin());
+      if (!AtBeginning) --I;
+
+      // If this instruction has a FrameIndex operand, we need to
+      // use that target machine register info object to eliminate
+      // it.
+      TRI.eliminateFrameIndexMEF(MI, SPAdj, i,
                               FrameIndexEliminationScavenging ?  RS : nullptr);
 
       // Reset the iterator if we were at the beginning of the BB.

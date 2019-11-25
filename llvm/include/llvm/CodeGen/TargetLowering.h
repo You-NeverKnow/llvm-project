@@ -1600,6 +1600,9 @@ public:
   virtual StringRef getStackProbeSymbolName(MachineFunction &MF) const {
     return "";
   }
+  virtual StringRef getStackProbeSymbolNameMEF(MachineFunction &MF) const {
+    return "";
+  }
 
   /// Returns true if a cast between SrcAS and DestAS is a noop.
   virtual bool isNoopAddrSpaceCast(unsigned SrcAS, unsigned DestAS) const {

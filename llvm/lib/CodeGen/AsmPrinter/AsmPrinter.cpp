@@ -125,6 +125,7 @@
 #include <string>
 #include <utility>
 #include <vector>
+#include <iostream>
 
 using namespace llvm;
 
@@ -274,6 +275,7 @@ bool AsmPrinter::doInitialization(Module &M) {
   // use the directive, where it would need the same conditionalization
   // anyway.
   const Triple &Target = TM.getTargetTriple();
+
   OutStreamer->EmitVersionForTarget(Target, M.getSDKVersion());
 
   // Allow the target to emit any magic that it wants at the start of the file.
@@ -735,6 +737,92 @@ void AsmPrinter::EmitFunctionHeader() {
   if (F.hasPrologueData())
     EmitGlobalConstant(F.getParent()->getDataLayout(), F.getPrologueData());
 }
+void AsmPrinter::EmitFunctionHeaderMEF() {
+//  const MEFBody *FnBody = MF->getFunctionMEF();
+//
+//  if (isVerbose())
+//    OutStreamer->GetCommentOS()
+//        << "-- Begin function "
+//        << GlobalValue::dropLLVMManglingEscape(FnBody->getName()) << '\n';
+//
+//  // Print out constants referenced by the function
+//  EmitConstantPool();
+//
+//  // Print the 'header' of function.
+//  OutStreamer->SwitchSection(getObjFileLowering().SectionForGlobal(&F, TM));
+//  EmitVisibility(CurrentFnSym, F.getVisibility());
+//
+//  EmitLinkage(&F, CurrentFnSym);
+//  if (MAI->hasFunctionAlignment())
+//    EmitAlignment(MF->getAlignment(), &F);
+//
+//  if (MAI->hasDotTypeDotSizeDirective())
+//    OutStreamer->EmitSymbolAttribute(CurrentFnSym, MCSA_ELF_TypeFunction);
+//
+////  if (F.hasFnAttribute(Attribute::Cold))
+////    OutStreamer->EmitSymbolAttribute(CurrentFnSym, MCSA_Cold);
+//
+//  if (isVerbose()) {
+//    F.printAsOperand(OutStreamer->GetCommentOS(),
+//                   /*PrintType=*/false, F.getParent());
+//    OutStreamer->GetCommentOS() << '\n';
+//  }
+//
+//  // Emit the prefix data.
+//  if (F.hasPrefixData()) {
+//    if (MAI->hasSubsectionsViaSymbols()) {
+//      // Preserving prefix data on platforms which use subsections-via-symbols
+//      // is a bit tricky. Here we introduce a symbol for the prefix data
+//      // and use the .alt_entry attribute to mark the function's real entry point
+//      // as an alternative entry point to the prefix-data symbol.
+//      MCSymbol *PrefixSym = OutContext.createLinkerPrivateTempSymbol();
+//      OutStreamer->EmitLabel(PrefixSym);
+//
+//      EmitGlobalConstant(F.getParent()->getDataLayout(), F.getPrefixData());
+//
+//      // Emit an .alt_entry directive for the actual function symbol.
+//      OutStreamer->EmitSymbolAttribute(CurrentFnSym, MCSA_AltEntry);
+//    } else {
+//      EmitGlobalConstant(F.getParent()->getDataLayout(), F.getPrefixData());
+//    }
+//  }
+//
+//  // Emit the CurrentFnSym.  This is a virtual function to allow targets to
+//  // do their wild and crazy things as required.
+//  EmitFunctionEntryLabel();
+//
+//  // If the function had address-taken blocks that got deleted, then we have
+//  // references to the dangling symbols.  Emit them at the start of the function
+//  // so that we don't get references to undefined symbols.
+//  std::vector<MCSymbol*> DeadBlockSyms;
+//  MMI->takeDeletedSymbolsForFunction(&F, DeadBlockSyms);
+//  for (unsigned i = 0, e = DeadBlockSyms.size(); i != e; ++i) {
+//    OutStreamer->AddComment("Address taken block that was later removed");
+//    OutStreamer->EmitLabel(DeadBlockSyms[i]);
+//  }
+//
+//  if (CurrentFnBegin) {
+//    if (MAI->useAssignmentForEHBegin()) {
+//      MCSymbol *CurPos = OutContext.createTempSymbol();
+//      OutStreamer->EmitLabel(CurPos);
+//      OutStreamer->EmitAssignment(CurrentFnBegin,
+//                                 MCSymbolRefExpr::create(CurPos, OutContext));
+//    } else {
+//      OutStreamer->EmitLabel(CurrentFnBegin);
+//    }
+//  }
+//
+//  // Emit pre-function debug and/or EH information.
+//  for (const HandlerInfo &HI : Handlers) {
+//    NamedRegionTimer T(HI.TimerName, HI.TimerDescription, HI.TimerGroupName,
+//                       HI.TimerGroupDescription, TimePassesIsEnabled);
+//    HI.Handler->beginFunction(MF);
+//  }
+//
+//  // Emit the prologue data.
+//  if (F.hasPrologueData())
+//    EmitGlobalConstant(F.getParent()->getDataLayout(), F.getPrologueData());
+}
 
 /// EmitFunctionEntryLabel - Emit the label that is the entrypoint for the
 /// function.  This can be overridden by targets as required to do custom stuff.
@@ -1193,6 +1281,217 @@ void AsmPrinter::EmitFunctionBody() {
   }
 
   // Print out jump tables referenced by the function.
+  EmitJumpTableInfo();
+
+  // Emit post-function debug and/or EH information.
+  for (const HandlerInfo &HI : Handlers) {
+    NamedRegionTimer T(HI.TimerName, HI.TimerDescription, HI.TimerGroupName,
+                       HI.TimerGroupDescription, TimePassesIsEnabled);
+    HI.Handler->endFunction(MF);
+  }
+
+  // Emit section containing stack size metadata.
+  emitStackSizeSection(*MF);
+
+  if (isVerbose())
+    OutStreamer->GetCommentOS() << "-- End function\n";
+
+  OutStreamer->AddBlankLine();
+}
+void AsmPrinter::EmitFunctionBodyMEF() {
+  EmitFunctionHeaderMEF();
+
+  // Emit target-specific gunk before the function body.
+//  EmitFunctionBodyStart();
+
+  bool ShouldPrintDebugScopes = MMI->hasDebugInfo();
+
+//  if (isVerbose()) {
+//    // Get MachineDominatorTree or compute it on the fly if it's unavailable
+//    MDT = getAnalysisIfAvailable<MachineDominatorTree>();
+//    if (!MDT) {
+//      OwnedMDT = make_unique<MachineDominatorTree>();
+//      OwnedMDT->getBase().recalculate(*MF);
+//      MDT = OwnedMDT.get();
+//    }
+//
+//    // Get MachineLoopInfo or compute it on the fly if it's unavailable
+//    MLI = getAnalysisIfAvailable<MachineLoopInfo>();
+//    if (!MLI) {
+//      OwnedMLI = make_unique<MachineLoopInfo>();
+//      OwnedMLI->getBase().analyze(MDT->getBase());
+//      MLI = OwnedMLI.get();
+//    }
+//  }
+    std::cout << "Starting up..." << '\n' << std::endl;
+  // Print out code for the function.
+  bool HasAnyRealCode = false;
+  int NumInstsInFunction = 0;
+    std::cout << "MF: " << MF << std::endl;
+    for (auto &MBB : *MF) {
+    // Print a label for the basic block.
+//      std::cout << "Start ...." << '\n' << std::endl;
+    EmitBasicBlockStartMEF(MBB);
+//      std::cout << "For each bb..." << '\n' << std::endl;
+
+    for (auto &MI : MBB) {
+      // Print the assembly for the instruction.
+      if (!MI.isPosition() && !MI.isImplicitDef() && !MI.isKill() &&
+          !MI.isDebugInstr()) {
+        HasAnyRealCode = true;
+        ++NumInstsInFunction;
+      }
+
+      // If there is a pre-instruction symbol, emit a label for it here.
+      if (MCSymbol *S = MI.getPreInstrSymbol())
+        OutStreamer->EmitLabel(S);
+
+      if (ShouldPrintDebugScopes) {
+        for (const HandlerInfo &HI : Handlers) {
+          NamedRegionTimer T(HI.TimerName, HI.TimerDescription,
+                             HI.TimerGroupName, HI.TimerGroupDescription,
+                             TimePassesIsEnabled);
+          HI.Handler->beginInstruction(&MI);
+        }
+      }
+
+      if (isVerbose())
+        emitComments(MI, OutStreamer->GetCommentOS());
+
+      switch (MI.getOpcode()) {
+      case TargetOpcode::CFI_INSTRUCTION:
+        emitCFIInstruction(MI);
+        break;
+      case TargetOpcode::LOCAL_ESCAPE:
+        emitFrameAlloc(MI);
+        break;
+      case TargetOpcode::ANNOTATION_LABEL:
+      case TargetOpcode::EH_LABEL:
+      case TargetOpcode::GC_LABEL:
+        OutStreamer->EmitLabel(MI.getOperand(0).getMCSymbol());
+        break;
+      case TargetOpcode::INLINEASM:
+      case TargetOpcode::INLINEASM_BR:
+        EmitInlineAsm(&MI);
+        break;
+      case TargetOpcode::DBG_VALUE:
+        if (isVerbose()) {
+          if (!emitDebugValueComment(&MI, *this))
+            EmitInstruction(&MI);
+        }
+        break;
+      case TargetOpcode::DBG_LABEL:
+        if (isVerbose()) {
+          if (!emitDebugLabelComment(&MI, *this))
+            EmitInstruction(&MI);
+        }
+        break;
+      case TargetOpcode::IMPLICIT_DEF:
+        if (isVerbose()) emitImplicitDef(&MI);
+        break;
+      case TargetOpcode::KILL:
+        if (isVerbose()) emitKill(&MI, *this);
+        break;
+      default:
+        EmitInstruction(&MI);
+        break;
+      }
+
+      // If there is a post-instruction symbol, emit a label for it here.
+      if (MCSymbol *S = MI.getPostInstrSymbol())
+        OutStreamer->EmitLabel(S);
+
+      if (ShouldPrintDebugScopes) {
+        for (const HandlerInfo &HI : Handlers) {
+          NamedRegionTimer T(HI.TimerName, HI.TimerDescription,
+                             HI.TimerGroupName, HI.TimerGroupDescription,
+                             TimePassesIsEnabled);
+          HI.Handler->endInstruction();
+        }
+      }
+    }
+
+    EmitBasicBlockEndMEF(MBB);
+  }
+    // debug
+    std::cout << "All BBs done" << '\n' << std::endl;
+
+  EmittedInsts += NumInstsInFunction;
+//  MachineOptimizationRemarkAnalysis R(DEBUG_TYPE, "InstructionCount",
+//                                      MF->getFunction().getSubprogram(),
+//                                      &MF->front());
+//  R << ore::NV("NumInstructions", NumInstsInFunction)
+//    << " instructions in function";
+//  ORE->emit(R);
+
+  // If the function is empty and the object file uses .subsections_via_symbols,
+  // then we need to emit *something* to the function body to prevent the
+  // labels from collapsing together.  Just emit a noop.
+  // Similarly, don't emit empty functions on Windows either. It can lead to
+  // duplicate entries (two functions with the same RVA) in the Guard CF Table
+  // after linking, causing the kernel not to load the binary:
+  // https://developercommunity.visualstudio.com/content/problem/45366/vc-linker-creates-invalid-dll-with-clang-cl.html
+  // FIXME: Hide this behind some API in e.g. MCAsmInfo or MCTargetStreamer.
+  const Triple &TT = TM.getTargetTriple();
+  if (!HasAnyRealCode && (MAI->hasSubsectionsViaSymbols() ||
+                          (TT.isOSWindows() && TT.isOSBinFormatCOFF()))) {
+    MCInst Noop;
+    MF->getSubtarget().getInstrInfo()->getNoop(Noop);
+
+    // Targets can opt-out of emitting the noop here by leaving the opcode
+    // unspecified.
+    if (Noop.getOpcode()) {
+      OutStreamer->AddComment("avoids zero-length function");
+      OutStreamer->EmitInstruction(Noop, getSubtargetInfo());
+    }
+  }
+
+    std::cout << "...Iterating over real bb" << '\n' << std::endl;
+    const MEFBody *FnBody = MF->getFunctionMEF();
+  for (const auto &BB : *FnBody) {
+    if (!BB.hasAddressTaken())
+      continue;
+    MCSymbol *Sym = GetBlockAddressSymbol(&BB);
+    if (Sym->isDefined())
+      continue;
+    OutStreamer->AddComment("Address of block that was removed by CodeGen");
+    OutStreamer->EmitLabel(Sym);
+  }
+    std::cout << "...Finishing up" << '\n' << std::endl;
+
+  // Emit target-specific gunk after the function body.
+  EmitFunctionBodyEnd();
+
+    std::cout << "...Finishing up2" << '\n' << std::endl;
+//  if (needFuncLabelsForEHOrDebugInfo(*MF, MMI) ||
+//      MAI->hasDotTypeDotSizeDirective()) {
+//    // Create a symbol for the end of function.
+//    CurrentFnEnd = createTempSymbol("func_end");
+//    OutStreamer->EmitLabel(CurrentFnEnd);
+//  }
+    std::cout << "...Finishing up3" << '\n' << std::endl;
+
+  // If the target wants a .size directive for the size of the function, emit
+  // it. ::TODO:: Might need to implement if file has > 1 MEF function
+//  if (MAI->hasDotTypeDotSizeDirective()) {
+//    // We can get the size as difference between the function label and the
+//    // temp label.
+//    const MCExpr *SizeExp = MCBinaryExpr::createSub(
+//        MCSymbolRefExpr::create(CurrentFnEnd, OutContext),
+//        MCSymbolRefExpr::create(CurrentFnSymForSize, OutContext), OutContext);
+//    OutStreamer->emitELFSize(CurrentFnSym, SizeExp);
+//  }
+    std::cout << "...Finishing up4" << '\n' << std::endl;
+
+  for (const HandlerInfo &HI : Handlers) {
+    NamedRegionTimer T(HI.TimerName, HI.TimerDescription, HI.TimerGroupName,
+                       HI.TimerGroupDescription, TimePassesIsEnabled);
+    HI.Handler->markFunctionEnd();
+  }
+    std::cout << "...Finishing up5" << '\n' << std::endl;
+
+
+    // Print out jump tables referenced by the function.
   EmitJumpTableInfo();
 
   // Emit post-function debug and/or EH information.
@@ -2926,6 +3225,18 @@ void AsmPrinter::setupCodePaddingContext(const MachineBasicBlock &MBB,
   Context.IsBasicBlockReachableViaBranch =
       MBB.pred_size() > 0 && !isBlockOnlyReachableByFallthrough(&MBB);
 }
+void AsmPrinter::setupCodePaddingContextMEF(const MachineBasicBlock &MBB,
+                                         MCCodePaddingContext &Context) const {
+  assert(MF != nullptr && "Machine function must be valid");
+  Context.IsPaddingActive = !MF->hasInlineAsm() &&
+                            /*!MF->getFunction().hasOptSize() &&*/
+                            TM.getOptLevel() != CodeGenOpt::None;
+  Context.IsBasicBlockReachableViaFallthrough =
+      std::find(MBB.pred_begin(), MBB.pred_end(), MBB.getPrevNode()) !=
+      MBB.pred_end();
+  Context.IsBasicBlockReachableViaBranch =
+      MBB.pred_size() > 0 && !isBlockOnlyReachableByFallthrough(&MBB);
+}
 
 /// EmitBasicBlockStart - This method prints the label for the specified
 /// MachineBasicBlock, an alignment (if present) and a comment describing
@@ -2991,10 +3302,76 @@ void AsmPrinter::EmitBasicBlockStart(const MachineBasicBlock &MBB) const {
     OutStreamer->EmitLabel(MBB.getSymbol());
   }
 }
+void AsmPrinter::EmitBasicBlockStartMEF(const MachineBasicBlock &MBB) const {
+  // End the previous funclet and start a new one.
+  if (MBB.isEHFuncletEntry()) {
+    for (const HandlerInfo &HI : Handlers) {
+      HI.Handler->endFunclet();
+      HI.Handler->beginFunclet(MBB);
+    }
+  }
+
+  // Emit an alignment directive for this block, if needed.
+  if (unsigned Align = MBB.getAlignment())
+    EmitAlignment(Align);
+  MCCodePaddingContext Context;
+  setupCodePaddingContextMEF(MBB, Context);
+  OutStreamer->EmitCodePaddingBasicBlockStart(Context);
+
+  // If the block has its address taken, emit any labels that were used to
+  // reference the block.  It is possible that there is more than one label
+  // here, because multiple LLVM BB's may have been RAUW'd to this block after
+  // the references were generated.
+  if (MBB.hasAddressTaken()) {
+    const BasicBlock *BB = MBB.getBasicBlock();
+    if (isVerbose())
+      OutStreamer->AddComment("Block address taken");
+
+    // MBBs can have their address taken as part of CodeGen without having
+    // their corresponding BB's address taken in IR
+    if (BB->hasAddressTaken())
+      for (MCSymbol *Sym : MMI->getAddrLabelSymbolToEmit(BB))
+        OutStreamer->EmitLabel(Sym);
+  }
+
+  // Print some verbose block comments.
+  if (isVerbose()) {
+    if (const BasicBlock *BB = MBB.getBasicBlock()) {
+      if (BB->hasName()) {
+        BB->printAsOperand(OutStreamer->GetCommentOS(),
+                           /*PrintType=*/false, BB->getModule());
+        OutStreamer->GetCommentOS() << '\n';
+      }
+    }
+
+    assert(MLI != nullptr && "MachineLoopInfo should has been computed");
+    emitBasicBlockLoopComments(MBB, MLI, *this);
+  }
+
+  // Print the main label for the block.
+  if (MBB.pred_empty() ||
+      (isBlockOnlyReachableByFallthrough(&MBB) && !MBB.isEHFuncletEntry() &&
+       !MBB.hasLabelMustBeEmitted())) {
+    if (isVerbose()) {
+      // NOTE: Want this comment at start of line, don't emit with AddComment.
+      OutStreamer->emitRawComment(" %bb." + Twine(MBB.getNumber()) + ":",
+                                  false);
+    }
+  } else {
+    if (isVerbose() && MBB.hasLabelMustBeEmitted())
+      OutStreamer->AddComment("Label of block must be emitted");
+    OutStreamer->EmitLabel(MBB.getSymbol());
+  }
+}
 
 void AsmPrinter::EmitBasicBlockEnd(const MachineBasicBlock &MBB) {
   MCCodePaddingContext Context;
   setupCodePaddingContext(MBB, Context);
+  OutStreamer->EmitCodePaddingBasicBlockEnd(Context);
+}
+void AsmPrinter::EmitBasicBlockEndMEF(const MachineBasicBlock &MBB) {
+  MCCodePaddingContext Context;
+  setupCodePaddingContextMEF(MBB, Context);
   OutStreamer->EmitCodePaddingBasicBlockEnd(Context);
 }
 

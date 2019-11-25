@@ -1190,6 +1190,7 @@ namespace llvm {
     bool supportSwiftError() const override;
 
     StringRef getStackProbeSymbolName(MachineFunction &MF) const override;
+//    StringRef getStackProbeSymbolNameMEF(MachineFunction &MF) const override;
 
     bool hasVectorBlend() const override { return true; }
 

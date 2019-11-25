@@ -308,6 +308,7 @@ public:
 
   /// This method emits the body and trailer for a function.
   void EmitFunctionBody();
+  void EmitFunctionBodyMEF();
 
   void emitCFIInstruction(const MachineInstr &MI);
 
@@ -401,9 +402,11 @@ public:
   /// MachineBasicBlock, an alignment (if present) and a comment describing it
   /// if appropriate.
   virtual void EmitBasicBlockStart(const MachineBasicBlock &MBB) const;
+  virtual void EmitBasicBlockStartMEF(const MachineBasicBlock &MBB) const;
 
   /// Targets can override this to emit stuff at the end of a basic block.
   virtual void EmitBasicBlockEnd(const MachineBasicBlock &MBB);
+  virtual void EmitBasicBlockEndMEF(const MachineBasicBlock &MBB);
 
   /// Targets should implement this to emit instructions.
   virtual void EmitInstruction(const MachineInstr *) {
@@ -644,6 +647,7 @@ private:
 
   /// This method emits the header for the current function.
   virtual void EmitFunctionHeader();
+  virtual void EmitFunctionHeaderMEF();
 
   /// Emit a blob of inline asm to the output streamer.
   void
@@ -679,6 +683,8 @@ private:
   /// Emit GlobalAlias or GlobalIFunc.
   void emitGlobalIndirectSymbol(Module &M, const GlobalIndirectSymbol &GIS);
   void setupCodePaddingContext(const MachineBasicBlock &MBB,
+                               MCCodePaddingContext &Context) const;
+  void setupCodePaddingContextMEF(const MachineBasicBlock &MBB,
                                MCCodePaddingContext &Context) const;
 };
 

@@ -106,6 +106,8 @@ public:
 
   int getFrameIndexReference(const MachineFunction &MF, int FI,
                              unsigned &FrameReg) const override;
+  int getFrameIndexReferenceMEF(const MachineFunction &MF, int FI,
+                             unsigned &FrameReg) const override;
 
   int getFrameIndexReferenceSP(const MachineFunction &MF,
                                int FI, unsigned &SPReg, int Adjustment) const;
@@ -182,6 +184,7 @@ public:
   /// Return true if the function has a redzone (accessible bytes past the
   /// frame of the top of stack function) as part of it's ABI.  
   bool has128ByteRedZone(const MachineFunction& MF) const;
+  bool has128ByteRedZoneMEF(const MachineFunction& MF) const;
 
 private:
   uint64_t calculateMaxStackAlign(const MachineFunction &MF) const;

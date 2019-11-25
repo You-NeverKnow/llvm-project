@@ -11,6 +11,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include <iostream>
 #include "X86AsmPrinter.h"
 #include "MCTargetDesc/X86ATTInstPrinter.h"
 #include "MCTargetDesc/X86BaseInfo.h"
@@ -53,6 +54,7 @@ X86AsmPrinter::X86AsmPrinter(TargetMachine &TM,
 /// runOnMachineFunction - Emit the function body.
 ///
 bool X86AsmPrinter::runOnMachineFunction(MachineFunction &MF) {
+
   Subtarget = &MF.getSubtarget<X86Subtarget>();
 
   SMShadowTracker.startFunction(MF);
@@ -80,6 +82,41 @@ bool X86AsmPrinter::runOnMachineFunction(MachineFunction &MF) {
 
   // Emit the XRay table for this function.
   emitXRayTable();
+
+  EmitFPOData = false;
+
+  // We didn't modify anything.
+  return false;
+}
+bool X86AsmPrinter::runOnMachineFunctionMEF(MachineFunction &MF) {
+  Subtarget = &MF.getSubtarget<X86Subtarget>();
+
+  SMShadowTracker.startFunction(MF);
+  CodeEmitter.reset(TM.getTarget().createMCCodeEmitter(
+      *Subtarget->getInstrInfo(), *Subtarget->getRegisterInfo(),
+      MF.getContext()));
+
+  EmitFPOData =
+      Subtarget->isTargetWin32() && MF.getMMI().getModule()->getCodeViewFlag();
+
+//  SetupMachineFunction(MF);
+    this->MF = &MF;
+  // :TODO:: Ignoring because branch not taken on x86-ubuntu
+  if (Subtarget->isTargetCOFF()) {
+    bool Local = MF.getFunction().hasLocalLinkage();
+    OutStreamer->BeginCOFFSymbolDef(CurrentFnSym);
+    OutStreamer->EmitCOFFSymbolStorageClass(
+        Local ? COFF::IMAGE_SYM_CLASS_STATIC : COFF::IMAGE_SYM_CLASS_EXTERNAL);
+    OutStreamer->EmitCOFFSymbolType(COFF::IMAGE_SYM_DTYPE_FUNCTION
+                                               << COFF::SCT_COMPLEX_TYPE_SHIFT);
+    OutStreamer->EndCOFFSymbolDef();
+  }
+
+  // Emit the rest of the function body.
+  EmitFunctionBodyMEF();
+
+  // Emit the XRay table for this function.
+//  emitXRayTable();
 
   EmitFPOData = false;
 

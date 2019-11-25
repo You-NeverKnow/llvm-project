@@ -474,6 +474,7 @@ public:
   /// getSubtarget - Return the subtarget for which this machine code is being
   /// compiled.
   const TargetSubtargetInfo &getSubtarget() const { return *STI; }
+  const TargetSubtargetInfo *getSubtargetSTI() const { return STI; }
 
   /// getSubtarget - This method returns a pointer to the specified type of
   /// TargetSubtargetInfo.  In debug builds, it verifies that the object being
@@ -590,6 +591,7 @@ public:
 
   /// Should we be emitting segmented stack stuff for the function
   bool shouldSplitStack() const;
+  bool shouldSplitStackMEF() const {return false;};
 
   /// getNumBlockIDs - Return the number of MBB ID's allocated.
   unsigned getNumBlockIDs() const { return (unsigned)MBBNumbering.size(); }

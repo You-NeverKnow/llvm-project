@@ -147,6 +147,7 @@ public:
   }
 
   bool runOnMachineFunction(MachineFunction &F) override;
+  bool runOnMachineFunctionMEF(MachineFunction &F) override;
   void EmitFunctionBodyStart() override;
   void EmitFunctionBodyEnd() override;
 };

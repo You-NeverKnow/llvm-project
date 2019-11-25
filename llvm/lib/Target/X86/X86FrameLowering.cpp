@@ -905,6 +905,15 @@ bool X86FrameLowering::has128ByteRedZone(const MachineFunction& MF) const {
   const bool IsWin64CC = STI.isCallingConvWin64(Fn.getCallingConv());
   return Is64Bit && !IsWin64CC && !Fn.hasFnAttribute(Attribute::NoRedZone);
 }
+bool X86FrameLowering::has128ByteRedZoneMEF(const MachineFunction& MF) const {
+  // x86-64 (non Win64) has a 128 byte red zone which is guaranteed not to be
+  // clobbered by any interrupt handler.
+  assert(&STI == &MF.getSubtarget<X86Subtarget>() &&
+         "MF used frame lowering for wrong subtarget");
+//  const Function &Fn = MF.getFunction();
+  const bool IsWin64CC = /*STI.isCallingConvWin64(Fn.getCallingConv())*/ false;
+  return Is64Bit && !IsWin64CC /*&& !Fn.hasFnAttribute(Attribute::NoRedZone)*/;
+}
 
 
 /// emitPrologue - Push callee-saved registers onto the stack, which
@@ -1559,7 +1568,7 @@ void X86FrameLowering::emitPrologueMEF(MachineFunction &MF,
   bool NeedsWinCFI = NeedsWin64CFI || NeedsWinFPO;
   bool NeedsDwarfCFI =
       !IsWin64Prologue && (MMI.hasDebugInfo() /*|| Fn.needsUnwindTableEntry()*/);
-  unsigned FramePtr = TRI->getFrameRegister(MF);
+  unsigned FramePtr = TRI->getFrameRegisterMEF(MF);
   const unsigned MachineFramePtr =
       STI.isTarget64BitILP32()
           ? getX86SubSuperRegister(FramePtr, 64) : FramePtr;
@@ -1579,7 +1588,7 @@ void X86FrameLowering::emitPrologueMEF(MachineFunction &MF,
     X86FI->setCalleeSavedFrameSize(
       X86FI->getCalleeSavedFrameSize() - TailCallReturnAddrDelta);
 
-  bool UseStackProbe = !STI.getTargetLowering()->getStackProbeSymbolName(MF).empty();
+  bool UseStackProbe = !STI.getTargetLowering()->getStackProbeSymbolNameMEF(MF).empty();
 
   // The default stack probe size is 4096 if the function has no stackprobesize
   // attribute.
@@ -1604,13 +1613,13 @@ void X86FrameLowering::emitPrologueMEF(MachineFunction &MF,
   // pointer, calls, or dynamic alloca then we do not need to adjust the
   // stack pointer (we fit in the Red Zone). We also check that we don't
   // push and pop from the stack.
-  if (has128ByteRedZone(MF) &&
+  if (has128ByteRedZoneMEF(MF) &&
       !TRI->needsStackRealignmentMEF(MF) &&
       !MFI.hasVarSizedObjects() &&             // No dynamic alloca.
       !MFI.adjustsStack() &&                   // No calls.
       !UseStackProbe &&                        // No stack probes.
-      !MFI.hasCopyImplyingStackAdjustment() && // Don't push and pop.
-      !MF.shouldSplitStack()) {                // Regular stack
+      !MFI.hasCopyImplyingStackAdjustment() /*&& // Don't push and pop.
+      !MF.shouldSplitStack()*/) {                // Regular stack
     uint64_t MinSize = X86FI->getCalleeSavedFrameSize();
     if (HasFP) MinSize += SlotSize;
     X86FI->setUsesRedZone(MinSize > 0 || StackSize > 0);
@@ -2010,7 +2019,7 @@ void X86FrameLowering::emitPrologueMEF(MachineFunction &MF,
   // of the stack pointer is at this point. Any variable size objects
   // will be allocated after this, so we can still use the base pointer
   // to reference locals.
-  if (TRI->hasBasePointer(MF)) {
+  if (TRI->hasBasePointerMEF(MF)) {
     // Update the base pointer with the current stack pointer.
     unsigned Opc = Uses64BitFramePtr ? X86::MOV64rr : X86::MOV32rr;
     BuildMI(MBB, MBBI, DL, TII.get(Opc), BasePtr)
@@ -2390,6 +2399,99 @@ int X86FrameLowering::getFrameIndexReference(const MachineFunction &MF, int FI,
       return Offset + StackSize;
     }
   } else if (TRI->needsStackRealignment(MF)) {
+    if (FI < 0) {
+      // Skip the saved EBP.
+      return Offset + SlotSize + FPDelta;
+    } else {
+      assert((-(Offset + StackSize)) % MFI.getObjectAlignment(FI) == 0);
+      return Offset + StackSize;
+    }
+    // FIXME: Support tail calls
+  } else {
+    if (!HasFP)
+      return Offset + StackSize;
+
+    // Skip the saved EBP.
+    Offset += SlotSize;
+
+    // Skip the RETADDR move area
+    int TailCallReturnAddrDelta = X86FI->getTCReturnAddrDelta();
+    if (TailCallReturnAddrDelta < 0)
+      Offset -= TailCallReturnAddrDelta;
+  }
+
+  return Offset + FPDelta;
+}
+int X86FrameLowering::getFrameIndexReferenceMEF(const MachineFunction &MF, int FI,
+                                             unsigned &FrameReg) const {
+  const MachineFrameInfo &MFI = MF.getFrameInfo();
+
+  bool IsFixed = MFI.isFixedObjectIndex(FI);
+  // We can't calculate offset from frame pointer if the stack is realigned,
+  // so enforce usage of stack/base pointer.  The base pointer is used when we
+  // have dynamic allocas in addition to dynamic realignment.
+  if (TRI->hasBasePointerMEF(MF))
+    FrameReg = IsFixed ? TRI->getFramePtr() : TRI->getBaseRegister();
+  else if (TRI->needsStackRealignmentMEF(MF))
+    FrameReg = IsFixed ? TRI->getFramePtr() : TRI->getStackRegister();
+  else
+    FrameReg = TRI->getFrameRegisterMEF(MF);
+
+  // Offset will hold the offset from the stack pointer at function entry to the
+  // object.
+  // We need to factor in additional offsets applied during the prologue to the
+  // frame, base, and stack pointer depending on which is used.
+  int Offset = MFI.getObjectOffset(FI) - getOffsetOfLocalArea();
+  const X86MachineFunctionInfo *X86FI = MF.getInfo<X86MachineFunctionInfo>();
+  unsigned CSSize = X86FI->getCalleeSavedFrameSize();
+  uint64_t StackSize = MFI.getStackSize();
+  bool HasFP = hasFPMEF(MF);
+  bool IsWin64Prologue = MF.getTarget().getMCAsmInfo()->usesWindowsCFI();
+  int64_t FPDelta = 0;
+
+  // In an x86 interrupt, remove the offset we added to account for the return
+  // address from any stack object allocated in the caller's frame. Interrupts
+  // do not have a standard return address. Fixed objects in the current frame,
+  // such as SSE register spills, should not get this treatment.
+//  if (MF.getFunction().getCallingConv() == CallingConv::X86_INTR &&
+//      Offset >= 0) {
+//    Offset += getOffsetOfLocalArea();
+//  }
+
+  if (IsWin64Prologue) {
+    assert(!MFI.hasCalls() || (StackSize % 16) == 8);
+
+    // Calculate required stack adjustment.
+    uint64_t FrameSize = StackSize - SlotSize;
+    // If required, include space for extra hidden slot for stashing base pointer.
+    if (X86FI->getRestoreBasePointer())
+      FrameSize += SlotSize;
+    uint64_t NumBytes = FrameSize - CSSize;
+
+    uint64_t SEHFrameOffset = calculateSetFPREG(NumBytes);
+    if (FI && FI == X86FI->getFAIndex())
+      return -SEHFrameOffset;
+
+    // FPDelta is the offset from the "traditional" FP location of the old base
+    // pointer followed by return address and the location required by the
+    // restricted Win64 prologue.
+    // Add FPDelta to all offsets below that go through the frame pointer.
+    FPDelta = FrameSize - SEHFrameOffset;
+    assert((!MFI.hasCalls() || (FPDelta % 16) == 0) &&
+           "FPDelta isn't aligned per the Win64 ABI!");
+  }
+
+
+  if (TRI->hasBasePointerMEF(MF)) {
+    assert(HasFP && "VLAs and dynamic stack realign, but no FP?!");
+    if (FI < 0) {
+      // Skip the saved EBP.
+      return Offset + SlotSize + FPDelta;
+    } else {
+      assert((-(Offset + StackSize)) % MFI.getObjectAlignment(FI) == 0);
+      return Offset + StackSize;
+    }
+  } else if (TRI->needsStackRealignmentMEF(MF)) {
     if (FI < 0) {
       // Skip the saved EBP.
       return Offset + SlotSize + FPDelta;

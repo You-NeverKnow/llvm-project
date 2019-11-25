@@ -45916,3 +45916,22 @@ X86TargetLowering::getStackProbeSymbolName(MachineFunction &MF) const {
     return Subtarget.isTargetCygMing() ? "___chkstk_ms" : "__chkstk";
   return Subtarget.isTargetCygMing() ? "_alloca" : "_chkstk";
 }
+
+//StringRef
+//X86TargetLowering::getStackProbeSymbolNameMEF(MachineFunction &MF) const {
+////  // If the function specifically requests stack probes, emit them.
+////  if (MF.getFunction().hasFnAttribute("probe-stack"))
+////    return MF.getFunction().getFnAttribute("probe-stack").getValueAsString();
+////
+////  // Generally, if we aren't on Windows, the platform ABI does not include
+////  // support for stack probes, so don't emit them.
+////  if (!Subtarget.isOSWindows() || Subtarget.isTargetMachO() ||
+////      MF.getFunction().hasFnAttribute("no-stack-arg-probe"))
+//    return "";
+//
+////  // We need a stack probe to conform to the Windows ABI. Choose the right
+////  // symbol.
+////  if (Subtarget.is64Bit())
+////    return Subtarget.isTargetCygMing() ? "___chkstk_ms" : "__chkstk";
+////  return Subtarget.isTargetCygMing() ? "_alloca" : "_chkstk";
+//}

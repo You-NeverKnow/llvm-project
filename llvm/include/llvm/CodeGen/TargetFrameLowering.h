@@ -266,6 +266,8 @@ public:
   /// returned directly, and the base register is returned via FrameReg.
   virtual int getFrameIndexReference(const MachineFunction &MF, int FI,
                                      unsigned &FrameReg) const;
+  virtual int getFrameIndexReferenceMEF(const MachineFunction &MF, int FI,
+                                     unsigned &FrameReg) const {return getFrameIndexReference(MF, FI, FrameReg);};
 
   /// Same as \c getFrameIndexReference, except that the stack pointer (as
   /// opposed to the frame pointer) will be the preferred value for \p
@@ -398,7 +400,7 @@ public:
 //      if (auto CS = ImmutableCallSite(U))
 //        if (CS.isTailCall())
 //          return false;
-    return true;
+    return false;
   }
 
   /// Return initial CFA offset value i.e. the one valid at the beginning of the

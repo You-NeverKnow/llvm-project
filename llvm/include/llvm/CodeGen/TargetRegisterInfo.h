@@ -968,6 +968,9 @@ public:
   virtual void eliminateFrameIndex(MachineBasicBlock::iterator MI,
                                    int SPAdj, unsigned FIOperandNum,
                                    RegScavenger *RS = nullptr) const = 0;
+  virtual void eliminateFrameIndexMEF(MachineBasicBlock::iterator MI,
+                                   int SPAdj, unsigned FIOperandNum,
+                                   RegScavenger *RS = nullptr) const {};
 
   /// Return the assembly name for \p Reg.
   virtual StringRef getRegAsmName(unsigned Reg) const {
@@ -999,6 +1002,7 @@ public:
   /// getFrameRegister - This method should return the register used as a base
   /// for values allocated in the current stack frame.
   virtual Register getFrameRegister(const MachineFunction &MF) const = 0;
+  virtual Register getFrameRegisterMEF(const MachineFunction &MF) const {return getFrameRegister(MF);};
 
   /// Mark a register and all its aliases as reserved in the given set.
   void markSuperRegs(BitVector &RegisterSet, unsigned Reg) const;

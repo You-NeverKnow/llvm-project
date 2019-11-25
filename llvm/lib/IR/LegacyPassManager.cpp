@@ -2066,7 +2066,6 @@ bool PassManagerImpl::runMEF(Module &M) {
   bool Changed = false;
   dumpArguments();
   dumpPasses();
-
   for (ImmutablePass *ImPass : getImmutablePasses())
     Changed |= ImPass->doInitialization(M);
 
