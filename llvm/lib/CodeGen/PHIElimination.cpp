@@ -75,6 +75,7 @@ namespace {
     }
 
     bool runOnMachineFunction(MachineFunction &MF) override;
+    bool runOnMachineFunctionMEF(MachineFunction &MF) override;
     void getAnalysisUsage(AnalysisUsage &AU) const override;
 
   private:
@@ -143,6 +144,55 @@ void PHIElimination::getAnalysisUsage(AnalysisUsage &AU) const {
 }
 
 bool PHIElimination::runOnMachineFunction(MachineFunction &MF) {
+  MRI = &MF.getRegInfo();
+  LV = getAnalysisIfAvailable<LiveVariables>();
+  LIS = getAnalysisIfAvailable<LiveIntervals>();
+
+  bool Changed = false;
+
+  // This pass takes the function out of SSA form.
+  MRI->leaveSSA();
+
+  // Split critical edges to help the coalescer.
+  if (!DisableEdgeSplitting && (LV || LIS)) {
+    MachineLoopInfo *MLI = getAnalysisIfAvailable<MachineLoopInfo>();
+    for (auto &MBB : MF)
+      Changed |= SplitPHIEdges(MF, MBB, MLI);
+  }
+
+  // Populate VRegPHIUseCount
+  analyzePHINodes(MF);
+
+  // Eliminate PHI instructions by inserting copies into predecessor blocks.
+  for (auto &MBB : MF)
+    Changed |= EliminatePHINodes(MF, MBB);
+
+  // Remove dead IMPLICIT_DEF instructions.
+  for (MachineInstr *DefMI : ImpDefs) {
+    unsigned DefReg = DefMI->getOperand(0).getReg();
+    if (MRI->use_nodbg_empty(DefReg)) {
+      if (LIS)
+        LIS->RemoveMachineInstrFromMaps(*DefMI);
+      DefMI->eraseFromParent();
+    }
+  }
+
+  // Clean up the lowered PHI instructions.
+  for (auto &I : LoweredPHIs) {
+    if (LIS)
+      LIS->RemoveMachineInstrFromMaps(*I.first);
+    MF.DeleteMachineInstr(I.first);
+  }
+
+  LoweredPHIs.clear();
+  ImpDefs.clear();
+  VRegPHIUseCount.clear();
+
+  MF.getProperties().set(MachineFunctionProperties::Property::NoPHIs);
+
+  return Changed;
+}
+bool PHIElimination::runOnMachineFunctionMEF(MachineFunction &MF) {
   MRI = &MF.getRegInfo();
   LV = getAnalysisIfAvailable<LiveVariables>();
   LIS = getAnalysisIfAvailable<LiveIntervals>();

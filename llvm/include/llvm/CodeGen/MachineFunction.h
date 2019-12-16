@@ -456,6 +456,7 @@ public:
 
   /// Return the DataLayout attached to the Module associated to this MF.
   const DataLayout &getDataLayout() const;
+  const DataLayout &getDataLayoutMEF() const;
 
   /// Return the LLVM function that this machine code represents
   const Function &getFunction() const { return *F; }
@@ -1010,10 +1011,10 @@ public:
 template <> struct GraphTraits<MachineFunction*> :
   public GraphTraits<MachineBasicBlock*> {
   static NodeRef getEntryNode(MachineFunction *F) {
-      if (F->getFunctionMEF()) {
-          const_cast<MachineFunction*>(F)->CreateMachineBasicBlock(&(F->getFunctionMEF()->getPseudoEntryBlock()));
-      }
       return &F->front();
+  }
+  static NodeRef getEntryNodeMEF(MachineFunction *F) {
+      return const_cast<MachineFunction*>(F)->CreateMachineBasicBlock(&(F->getFunctionMEF()->getPseudoEntryBlock()));
   }
 
   // nodes_iterator/begin/end - Allow iteration over all nodes in the graph
@@ -1032,10 +1033,10 @@ template <> struct GraphTraits<MachineFunction*> :
 template <> struct GraphTraits<const MachineFunction*> :
   public GraphTraits<const MachineBasicBlock*> {
   static NodeRef getEntryNode(const MachineFunction *F) {
-      if (F->getFunctionMEF()) {
-          const_cast<MachineFunction*>(F)->CreateMachineBasicBlock(&(F->getFunctionMEF()->getPseudoEntryBlock()));
-      }
       return &F->front();
+  }
+  static NodeRef getEntryNodeMEF(const MachineFunction *F) {
+      return const_cast<MachineFunction*>(F)->CreateMachineBasicBlock(&(F->getFunctionMEF()->getPseudoEntryBlock()));
   }
 
   // nodes_iterator/begin/end - Allow iteration over all nodes in the graph

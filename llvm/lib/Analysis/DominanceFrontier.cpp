@@ -49,6 +49,11 @@ bool DominanceFrontierWrapperPass::runOnFunction(Function &) {
   DF.analyze(getAnalysis<DominatorTreeWrapperPass>().getDomTree());
   return false;
 }
+bool DominanceFrontierWrapperPass::runOnFunctionMEF(MEFBody &) {
+  releaseMemory();
+  DF.analyze(getAnalysis<DominatorTreeWrapperPass>().getDomTree());
+  return false;
+}
 
 void DominanceFrontierWrapperPass::getAnalysisUsage(AnalysisUsage &AU) const {
   AU.setPreservesAll();

@@ -73,6 +73,7 @@
 #include <string>
 #include <utility>
 #include <vector>
+#include <iostream>
 
 using namespace llvm;
 
@@ -242,7 +243,7 @@ void MachineFunction::initMEF() {
 //  if (F.hasFnAttribute(Attribute::StackAlignment))
 //    FrameInfo->ensureMaxAlignment(F.getFnStackAlignment());
 
-  ConstantPool = new (Allocator) MachineConstantPool(getDataLayout());
+  ConstantPool = new (Allocator) MachineConstantPool(getDataLayoutMEF());
   Alignment = STI->getTargetLowering()->getMinFunctionAlignment();
 
   // FIXME: Shouldn't use pref alignment if explicit alignment is set on F.
@@ -266,7 +267,7 @@ void MachineFunction::initMEF() {
     WasmEHInfo = new (Allocator) WasmEHFuncInfo();
   }
 
-  assert(Target.isCompatibleDataLayout(getDataLayout()) &&
+  assert(Target.isCompatibleDataLayout(getDataLayoutMEF()) &&
          "Can't create a MachineFunction using a Module with a "
          "Target-incompatible DataLayout attached\n");
 
@@ -326,8 +327,11 @@ void MachineFunction::clear() {
 }
 
 const DataLayout &MachineFunction::getDataLayout() const {
-    if (B) return B->getParent()->getDataLayout();
   return F->getParent()->getDataLayout();
+}
+
+const DataLayout &MachineFunction::getDataLayoutMEF() const {
+  return B->getParent()->getDataLayout();
 }
 
 /// Get the JumpTableInfo for this function.
@@ -548,7 +552,6 @@ LLVM_DUMP_METHOD void MachineFunction::dump() const {
 #endif
 
 StringRef MachineFunction::getName() const {
-    if (B) return B->getName();
   return getFunction().getName();
 }
 

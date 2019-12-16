@@ -55,6 +55,7 @@ public:
 
 private:
   bool runOnMachineFunction(MachineFunction&) override;
+  bool runOnMachineFunctionMEF(MachineFunction&) override;
   void getAnalysisUsage(AnalysisUsage&) const override;
 };
 

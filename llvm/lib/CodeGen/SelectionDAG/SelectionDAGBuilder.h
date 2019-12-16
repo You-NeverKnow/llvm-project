@@ -431,6 +431,8 @@ public:
 
   void init(GCFunctionInfo *gfi, AliasAnalysis *AA,
             const TargetLibraryInfo *li);
+  void initMEF(GCFunctionInfo *gfi, AliasAnalysis *AA,
+            const TargetLibraryInfo *li);
 
   /// Clear out the current SelectionDAG and the associated state and prepare
   /// this SelectionDAGBuilder object to be used for a new block. This doesn't

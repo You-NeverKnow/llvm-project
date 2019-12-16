@@ -32,6 +32,7 @@ namespace {
 
   private:
     bool runOnMachineFunction(MachineFunction &MF) override;
+    bool runOnMachineFunctionMEF(MachineFunction &MF) override;
 
     void getAnalysisUsage(AnalysisUsage &AU) const override {
       MachineFunctionPass::getAnalysisUsage(AU);
@@ -71,6 +72,36 @@ bool FinalizeISel::runOnMachineFunction(MachineFunction &MF) {
   }
 
   TLI->finalizeLowering(MF);
+
+  return Changed;
+}
+bool FinalizeISel::runOnMachineFunctionMEF(MachineFunction &MF) {
+  bool Changed = false;
+  const TargetLowering *TLI = MF.getSubtarget().getTargetLowering();
+
+  // Iterate through each instruction in the function, looking for pseudos.
+  for (MachineFunction::iterator I = MF.begin(), E = MF.end(); I != E; ++I) {
+    MachineBasicBlock *MBB = &*I;
+    for (MachineBasicBlock::iterator MBBI = MBB->begin(), MBBE = MBB->end();
+         MBBI != MBBE; ) {
+      MachineInstr &MI = *MBBI++;
+
+      // If MI is a pseudo, expand it.
+      if (MI.usesCustomInsertionHook()) {
+        Changed = true;
+        MachineBasicBlock *NewMBB = TLI->EmitInstrWithCustomInserter(MI, MBB);
+        // The expansion may involve new basic blocks.
+        if (NewMBB != MBB) {
+          MBB = NewMBB;
+          I = NewMBB->getIterator();
+          MBBI = NewMBB->begin();
+          MBBE = NewMBB->end();
+        }
+      }
+    }
+  }
+
+  TLI->finalizeLoweringMEF(MF);
 
   return Changed;
 }

@@ -48,6 +48,7 @@ public:
   const X86FrameLowering *X86FL;
 
   bool runOnMachineFunction(MachineFunction &Fn) override;
+  bool runOnMachineFunctionMEF(MachineFunction &Fn) override;
 
   MachineFunctionProperties getRequiredProperties() const override {
     return MachineFunctionProperties().set(
@@ -406,6 +407,18 @@ bool X86ExpandPseudo::runOnMachineFunction(MachineFunction &MF) {
   return Modified;
 }
 
+bool X86ExpandPseudo::runOnMachineFunctionMEF(MachineFunction &MF) {
+    STI = &static_cast<const X86Subtarget &>(MF.getSubtarget());
+    TII = STI->getInstrInfo();
+    TRI = STI->getRegisterInfo();
+    X86FI = MF.getInfo<X86MachineFunctionInfo>();
+    X86FL = STI->getFrameLowering();
+
+    bool Modified = false;
+    for (MachineBasicBlock &MBB : MF)
+        Modified |= ExpandMBB(MBB);
+    return Modified;
+}
 /// Returns an instance of the pseudo instruction expansion pass.
 FunctionPass *llvm::createX86ExpandPseudoPass() {
   return new X86ExpandPseudo();

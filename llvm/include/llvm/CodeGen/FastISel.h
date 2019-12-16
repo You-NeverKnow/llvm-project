@@ -263,6 +263,7 @@ public:
   /// and append the generated machine instructions to the current block.
   /// Returns true if selection was successful.
   bool selectInstruction(const Instruction *I);
+  bool selectInstructionMEF(const Instruction *I);
 
   /// Do "fast" instruction selection for the given LLVM IR operator
   /// (Instruction or ConstantExpr), and append generated machine instructions
@@ -272,6 +273,7 @@ public:
   /// Create a virtual register and arrange for it to be assigned the
   /// value for the given LLVM value.
   unsigned getRegForValue(const Value *V);
+  unsigned getRegForValueMEF(const Value *V);
 
   /// Look up the value to see if its value is already cached in a
   /// register. It may be defined by instructions across blocks or defined
@@ -336,12 +338,16 @@ protected:
   explicit FastISel(FunctionLoweringInfo &FuncInfo,
                     const TargetLibraryInfo *LibInfo,
                     bool SkipTargetIndependentISel = false);
+  explicit FastISel(const TargetLibraryInfo *LibInfo,
+                    FunctionLoweringInfo &FuncInfo,
+                    bool SkipTargetIndependentISel = false);
 
   /// This method is called by target-independent code when the normal
   /// FastISel process fails to select an instruction. This gives targets a
   /// chance to emit code for anything that doesn't fit into FastISel's
   /// framework. It returns true if it was successful.
   virtual bool fastSelectInstruction(const Instruction *I) = 0;
+  virtual bool fastSelectInstructionMEF(const Instruction *I)  {return false;};
 
   /// This method is called by target-independent code to do target-
   /// specific argument lowering. It returns true if it was successful.

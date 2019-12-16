@@ -419,6 +419,69 @@ unsigned FastISel::getRegForValue(const Value *V) {
 
   return Reg;
 }
+unsigned FastISel::getRegForValueMEF(const Value *V) {
+    // debug
+    std::cout << "Start." << '\n';
+
+  EVT RealVT = TLI.getValueType(DL, V->getType(), /*AllowUnknown=*/true);
+
+    // debug
+    std::cout << "Start.1" << '\n';
+  // Don't handle non-simple values in FastISel.
+  if (!RealVT.isSimple())
+    return 0;
+    // debug
+    std::cout << "Start.2" << '\n';
+
+  // Ignore illegal types. We must do this before looking up the value
+  // in ValueMap because Arguments are given virtual registers regardless
+  // of whether FastISel can handle them.
+  MVT VT = RealVT.getSimpleVT();
+    // debug
+    std::cout << "Start.3" << '\n';
+
+    if (!TLI.isTypeLegal(VT)) {
+        // debug
+        std::cout << "Start.5" << '\n';
+
+        // Handle integer promotions, though, because they're common and easy.
+    if (VT == MVT::i1 || VT == MVT::i8 || VT == MVT::i16) {
+        // debug
+        std::cout << "Start.6" << '\n';
+
+        VT = TLI.getTypeToTransformTo(V->getContext(), VT).getSimpleVT();
+    }
+    else
+      return 0;
+  }
+
+    std::cout << "Start.7" << '\n';
+
+  // Look up the value to see if we already have a register for it.
+  unsigned Reg = lookUpRegForValue(V);
+  if (Reg)
+    return Reg;
+    std::cout << "Start.76" << '\n';
+
+  // In bottom-up mode, just create the virtual register which will be used
+  // to hold the value. It will be materialized later.
+  if (isa<Instruction>(V) &&
+      (!isa<AllocaInst>(V) ||
+       !FuncInfo.StaticAllocaMap.count(cast<AllocaInst>(V))))
+    return FuncInfo.InitializeRegForValueMEF(V);
+    std::cout << "Start.8" << '\n';
+
+  SavePoint SaveInsertPt = enterLocalValueArea();
+
+  // Materialize the value in a register. Emit any instructions in the
+  // local value area.
+  Reg = materializeRegForValue(V, VT);
+    std::cout << "Start.9" << '\n';
+
+  leaveLocalValueArea(SaveInsertPt);
+
+  return Reg;
+}
 
 unsigned FastISel::materializeConstant(const Value *V, MVT VT) {
   unsigned Reg = 0;
@@ -1692,6 +1755,82 @@ bool FastISel::selectInstruction(const Instruction *I) {
   }
   return false;
 }
+bool FastISel::selectInstructionMEF(const Instruction *I) {
+  MachineInstr *SavedLastLocalValue = getLastLocalValue();
+  // Just before the terminator instruction, insert instructions to
+  // feed PHI nodes in successor blocks.
+  if (I->isTerminator()) {
+    if (!handlePHINodesInSuccessorBlocks(I->getParent())) {
+      // PHI node handling may have generated local value instructions,
+      // even though it failed to handle all PHI nodes.
+      // We remove these instructions because SelectionDAGISel will generate
+      // them again.
+      removeDeadLocalValueCode(SavedLastLocalValue);
+      return false;
+    }
+  }
+
+  // FastISel does not handle any operand bundles except OB_funclet.
+  if (ImmutableCallSite CS = ImmutableCallSite(I))
+    for (unsigned i = 0, e = CS.getNumOperandBundles(); i != e; ++i)
+      if (CS.getOperandBundleAt(i).getTagID() != LLVMContext::OB_funclet)
+        return false;
+
+  DbgLoc = I->getDebugLoc();
+
+  SavedInsertPt = FuncInfo.InsertPt;
+
+  if (const auto *Call = dyn_cast<CallInst>(I)) {
+    const Function *F = Call->getCalledFunction();
+    LibFunc Func;
+
+    // As a special case, don't handle calls to builtin library functions that
+    // may be translated directly to target instructions.
+    if (F && !F->hasLocalLinkage() && F->hasName() &&
+        LibInfo->getLibFunc(F->getName(), Func) &&
+        LibInfo->hasOptimizedCodeGen(Func))
+      return false;
+
+    // Don't handle Intrinsic::trap if a trap function is specified.
+    if (F && F->getIntrinsicID() == Intrinsic::trap &&
+        Call->hasFnAttr("trap-func-name"))
+      return false;
+  }
+
+  // First, try doing target-independent selection.
+  if (!SkipTargetIndependentISel) {
+    if (selectOperator(I, I->getOpcode())) {
+      ++NumFastIselSuccessIndependent;
+      DbgLoc = DebugLoc();
+      return true;
+    }
+    // Remove dead code.
+    recomputeInsertPt();
+    if (SavedInsertPt != FuncInfo.InsertPt)
+      removeDeadCode(FuncInfo.InsertPt, SavedInsertPt);
+    SavedInsertPt = FuncInfo.InsertPt;
+  }
+  // Next, try calling the target to attempt to handle the instruction.
+  if (fastSelectInstructionMEF(I)) {
+    ++NumFastIselSuccessTarget;
+    DbgLoc = DebugLoc();
+    return true;
+  }
+  // Remove dead code.
+  recomputeInsertPt();
+  if (SavedInsertPt != FuncInfo.InsertPt)
+    removeDeadCode(FuncInfo.InsertPt, SavedInsertPt);
+
+  DbgLoc = DebugLoc();
+  // Undo phi node updates, because they will be added again by SelectionDAG.
+  if (I->isTerminator()) {
+    // PHI node handling may have generated local value instructions.
+    // We remove them because SelectionDAGISel will generate them again.
+    removeDeadLocalValueCode(SavedLastLocalValue);
+    FuncInfo.PHINodesToUpdate.resize(FuncInfo.OrigNumPHINodesToUpdate);
+  }
+  return false;
+}
 
 /// Emit an unconditional branch to the given block, unless it is the immediate
 /// (fall-through) successor, and update the CFG.
@@ -1953,6 +2092,18 @@ FastISel::FastISel(FunctionLoweringInfo &FuncInfo,
     : FuncInfo(FuncInfo), MF(FuncInfo.MF), MRI(FuncInfo.MF->getRegInfo()),
       MFI(FuncInfo.MF->getFrameInfo()), MCP(*FuncInfo.MF->getConstantPool()),
       TM(FuncInfo.MF->getTarget()), DL(MF->getDataLayout()),
+      TII(*MF->getSubtarget().getInstrInfo()),
+      TLI(*MF->getSubtarget().getTargetLowering()),
+      TRI(*MF->getSubtarget().getRegisterInfo()), LibInfo(LibInfo),
+      SkipTargetIndependentISel(SkipTargetIndependentISel) {}
+
+      // Reversed arguments to overload this Function for MEF datalayout
+FastISel::FastISel(const TargetLibraryInfo *LibInfo,
+                    FunctionLoweringInfo &FuncInfo,
+                    bool SkipTargetIndependentISel)
+    : FuncInfo(FuncInfo), MF(FuncInfo.MF), MRI(FuncInfo.MF->getRegInfo()),
+      MFI(FuncInfo.MF->getFrameInfo()), MCP(*FuncInfo.MF->getConstantPool()),
+      TM(FuncInfo.MF->getTarget()), DL(MF->getDataLayoutMEF()),
       TII(*MF->getSubtarget().getInstrInfo()),
       TLI(*MF->getSubtarget().getTargetLowering()),
       TRI(*MF->getSubtarget().getRegisterInfo()), LibInfo(LibInfo),

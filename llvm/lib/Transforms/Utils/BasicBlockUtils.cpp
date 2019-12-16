@@ -152,8 +152,6 @@ bool llvm::EliminateUnreachableBlocks(MEFBody &F, DomTreeUpdater *DTU,
       DeadBlocks.push_back(BB);
     }
 
-  // Debug -- iterable
-  std::cout << "DeadBlocks = ";
   for(auto& var: DeadBlocks) std::cout << "1." << (std::string) var->getName() << " "; std::cout << '\n';
 
   // Delete the dead blocks.

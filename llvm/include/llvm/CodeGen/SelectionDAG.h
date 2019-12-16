@@ -414,6 +414,7 @@ public:
   const Pass *getPass() const { return SDAGISelPass; }
 
   const DataLayout &getDataLayout() const { return MF->getDataLayout(); }
+  const DataLayout &getDataLayoutMEF() const { return MF->getDataLayoutMEF(); }
   const TargetMachine &getTarget() const { return TM; }
   const TargetSubtargetInfo &getSubtarget() const { return MF->getSubtarget(); }
   const TargetLowering &getTargetLoweringInfo() const { return *TLI; }

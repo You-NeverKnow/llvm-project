@@ -81,6 +81,7 @@ public:
 
   StringRef getPassName() const override { return "X86 EFLAGS copy lowering"; }
   bool runOnMachineFunction(MachineFunction &MF) override;
+//  bool runOnMachineFunctionMEF(MachineFunction &MF) override;
   void getAnalysisUsage(AnalysisUsage &AU) const override;
 
   /// Pass identification, replacement for typeid.
@@ -710,6 +711,382 @@ bool X86FlagsCopyLoweringPass::runOnMachineFunction(MachineFunction &MF) {
 
   return true;
 }
+//bool X86FlagsCopyLoweringPass::runOnMachineFunctionMEF(MachineFunction &MF) {
+//  LLVM_DEBUG(dbgs() << "********** " << getPassName() << " : " << MF.getName()
+//                    << " **********\n");
+//
+//  Subtarget = &MF.getSubtarget<X86Subtarget>();
+//  MRI = &MF.getRegInfo();
+//  TII = Subtarget->getInstrInfo();
+//  TRI = Subtarget->getRegisterInfo();
+//  MDT = &getAnalysis<MachineDominatorTree>();
+//  PromoteRC = &X86::GR8RegClass;
+//
+//  if (MF.begin() == MF.end())
+//    // Nothing to do for a degenerate empty function...
+//    return false;
+//
+//  // Collect the copies in RPO so that when there are chains where a copy is in
+//  // turn copied again we visit the first one first. This ensures we can find
+//  // viable locations for testing the original EFLAGS that dominate all the
+//  // uses across complex CFGs.
+//  SmallVector<MachineInstr *, 4> Copies;
+//  ReversePostOrderTraversal<MachineFunction *> RPOT(&MF);
+//  for (MachineBasicBlock *MBB : RPOT)
+//    for (MachineInstr &MI : *MBB)
+//      if (MI.getOpcode() == TargetOpcode::COPY &&
+//          MI.getOperand(0).getReg() == X86::EFLAGS)
+//        Copies.push_back(&MI);
+//
+//  for (MachineInstr *CopyI : Copies) {
+//    MachineBasicBlock &MBB = *CopyI->getParent();
+//
+//    MachineOperand &VOp = CopyI->getOperand(1);
+//    assert(VOp.isReg() &&
+//           "The input to the copy for EFLAGS should always be a register!");
+//    MachineInstr &CopyDefI = *MRI->getVRegDef(VOp.getReg());
+//    if (CopyDefI.getOpcode() != TargetOpcode::COPY) {
+//      // FIXME: The big likely candidate here are PHI nodes. We could in theory
+//      // handle PHI nodes, but it gets really, really hard. Insanely hard. Hard
+//      // enough that it is probably better to change every other part of LLVM
+//      // to avoid creating them. The issue is that once we have PHIs we won't
+//      // know which original EFLAGS value we need to capture with our setCCs
+//      // below. The end result will be computing a complete set of setCCs that
+//      // we *might* want, computing them in every place where we copy *out* of
+//      // EFLAGS and then doing SSA formation on all of them to insert necessary
+//      // PHI nodes and consume those here. Then hoping that somehow we DCE the
+//      // unnecessary ones. This DCE seems very unlikely to be successful and so
+//      // we will almost certainly end up with a glut of dead setCC
+//      // instructions. Until we have a motivating test case and fail to avoid
+//      // it by changing other parts of LLVM's lowering, we refuse to handle
+//      // this complex case here.
+//      LLVM_DEBUG(
+//          dbgs() << "ERROR: Encountered unexpected def of an eflags copy: ";
+//          CopyDefI.dump());
+//      report_fatal_error(
+//          "Cannot lower EFLAGS copy unless it is defined in turn by a copy!");
+//    }
+//
+//    auto Cleanup = make_scope_exit([&] {
+//      // All uses of the EFLAGS copy are now rewritten, kill the copy into
+//      // eflags and if dead the copy from.
+//      CopyI->eraseFromParent();
+//      if (MRI->use_empty(CopyDefI.getOperand(0).getReg()))
+//        CopyDefI.eraseFromParent();
+//      ++NumCopiesEliminated;
+//    });
+//
+//    MachineOperand &DOp = CopyI->getOperand(0);
+//    assert(DOp.isDef() && "Expected register def!");
+//    assert(DOp.getReg() == X86::EFLAGS && "Unexpected copy def register!");
+//    if (DOp.isDead())
+//      continue;
+//
+//    MachineBasicBlock *TestMBB = CopyDefI.getParent();
+//    auto TestPos = CopyDefI.getIterator();
+//    DebugLoc TestLoc = CopyDefI.getDebugLoc();
+//
+//    LLVM_DEBUG(dbgs() << "Rewriting copy: "; CopyI->dump());
+//
+//    // Walk up across live-in EFLAGS to find where they were actually def'ed.
+//    //
+//    // This copy's def may just be part of a region of blocks covered by
+//    // a single def of EFLAGS and we want to find the top of that region where
+//    // possible.
+//    //
+//    // This is essentially a search for a *candidate* reaching definition
+//    // location. We don't need to ever find the actual reaching definition here,
+//    // but we want to walk up the dominator tree to find the highest point which
+//    // would be viable for such a definition.
+//    auto HasEFLAGSClobber = [&](MachineBasicBlock::iterator Begin,
+//                                MachineBasicBlock::iterator End) {
+//      // Scan backwards as we expect these to be relatively short and often find
+//      // a clobber near the end.
+//      return llvm::any_of(
+//          llvm::reverse(llvm::make_range(Begin, End)), [&](MachineInstr &MI) {
+//            // Flag any instruction (other than the copy we are
+//            // currently rewriting) that defs EFLAGS.
+//            return &MI != CopyI && MI.findRegisterDefOperand(X86::EFLAGS);
+//          });
+//    };
+//    auto HasEFLAGSClobberPath = [&](MachineBasicBlock *BeginMBB,
+//                                    MachineBasicBlock *EndMBB) {
+//      assert(MDT->dominates(BeginMBB, EndMBB) &&
+//             "Only support paths down the dominator tree!");
+//      SmallPtrSet<MachineBasicBlock *, 4> Visited;
+//      SmallVector<MachineBasicBlock *, 4> Worklist;
+//      // We terminate at the beginning. No need to scan it.
+//      Visited.insert(BeginMBB);
+//      Worklist.push_back(EndMBB);
+//      do {
+//        auto *MBB = Worklist.pop_back_val();
+//        for (auto *PredMBB : MBB->predecessors()) {
+//          if (!Visited.insert(PredMBB).second)
+//            continue;
+//          if (HasEFLAGSClobber(PredMBB->begin(), PredMBB->end()))
+//            return true;
+//          // Enqueue this block to walk its predecessors.
+//          Worklist.push_back(PredMBB);
+//        }
+//      } while (!Worklist.empty());
+//      // No clobber found along a path from the begin to end.
+//      return false;
+//    };
+//    while (TestMBB->isLiveIn(X86::EFLAGS) && !TestMBB->pred_empty() &&
+//           !HasEFLAGSClobber(TestMBB->begin(), TestPos)) {
+//      // Find the nearest common dominator of the predecessors, as
+//      // that will be the best candidate to hoist into.
+//      MachineBasicBlock *HoistMBB =
+//          std::accumulate(std::next(TestMBB->pred_begin()), TestMBB->pred_end(),
+//                          *TestMBB->pred_begin(),
+//                          [&](MachineBasicBlock *LHS, MachineBasicBlock *RHS) {
+//                            return MDT->findNearestCommonDominator(LHS, RHS);
+//                          });
+//
+//      // Now we need to scan all predecessors that may be reached along paths to
+//      // the hoist block. A clobber anywhere in any of these blocks the hoist.
+//      // Note that this even handles loops because we require *no* clobbers.
+//      if (HasEFLAGSClobberPath(HoistMBB, TestMBB))
+//        break;
+//
+//      // We also need the terminators to not sneakily clobber flags.
+//      if (HasEFLAGSClobber(HoistMBB->getFirstTerminator()->getIterator(),
+//                           HoistMBB->instr_end()))
+//        break;
+//
+//      // We found a viable location, hoist our test position to it.
+//      TestMBB = HoistMBB;
+//      TestPos = TestMBB->getFirstTerminator()->getIterator();
+//      // Clear the debug location as it would just be confusing after hoisting.
+//      TestLoc = DebugLoc();
+//    }
+//    LLVM_DEBUG({
+//      auto DefIt = llvm::find_if(
+//          llvm::reverse(llvm::make_range(TestMBB->instr_begin(), TestPos)),
+//          [&](MachineInstr &MI) {
+//            return MI.findRegisterDefOperand(X86::EFLAGS);
+//          });
+//      if (DefIt.base() != TestMBB->instr_begin()) {
+//        dbgs() << "  Using EFLAGS defined by: ";
+//        DefIt->dump();
+//      } else {
+//        dbgs() << "  Using live-in flags for BB:\n";
+//        TestMBB->dump();
+//      }
+//    });
+//
+//    // While rewriting uses, we buffer jumps and rewrite them in a second pass
+//    // because doing so will perturb the CFG that we are walking to find the
+//    // uses in the first place.
+//    SmallVector<MachineInstr *, 4> JmpIs;
+//
+//    // Gather the condition flags that have already been preserved in
+//    // registers. We do this from scratch each time as we expect there to be
+//    // very few of them and we expect to not revisit the same copy definition
+//    // many times. If either of those change sufficiently we could build a map
+//    // of these up front instead.
+//    CondRegArray CondRegs = collectCondsInRegs(*TestMBB, TestPos);
+//
+//    // Collect the basic blocks we need to scan. Typically this will just be
+//    // a single basic block but we may have to scan multiple blocks if the
+//    // EFLAGS copy lives into successors.
+//    SmallVector<MachineBasicBlock *, 2> Blocks;
+//    SmallPtrSet<MachineBasicBlock *, 2> VisitedBlocks;
+//    Blocks.push_back(&MBB);
+//
+//    do {
+//      MachineBasicBlock &UseMBB = *Blocks.pop_back_val();
+//
+//      // Track when if/when we find a kill of the flags in this block.
+//      bool FlagsKilled = false;
+//
+//      // In most cases, we walk from the beginning to the end of the block. But
+//      // when the block is the same block as the copy is from, we will visit it
+//      // twice. The first time we start from the copy and go to the end. The
+//      // second time we start from the beginning and go to the copy. This lets
+//      // us handle copies inside of cycles.
+//      // FIXME: This loop is *super* confusing. This is at least in part
+//      // a symptom of all of this routine needing to be refactored into
+//      // documentable components. Once done, there may be a better way to write
+//      // this loop.
+//      for (auto MII = (&UseMBB == &MBB && !VisitedBlocks.count(&UseMBB))
+//                          ? std::next(CopyI->getIterator())
+//                          : UseMBB.instr_begin(),
+//                MIE = UseMBB.instr_end();
+//           MII != MIE;) {
+//        MachineInstr &MI = *MII++;
+//        // If we are in the original copy block and encounter either the copy
+//        // def or the copy itself, break so that we don't re-process any part of
+//        // the block or process the instructions in the range that was copied
+//        // over.
+//        if (&MI == CopyI || &MI == &CopyDefI) {
+//          assert(&UseMBB == &MBB && VisitedBlocks.count(&MBB) &&
+//                 "Should only encounter these on the second pass over the "
+//                 "original block.");
+//          break;
+//        }
+//
+//        MachineOperand *FlagUse = MI.findRegisterUseOperand(X86::EFLAGS);
+//        if (!FlagUse) {
+//          if (MI.findRegisterDefOperand(X86::EFLAGS)) {
+//            // If EFLAGS are defined, it's as-if they were killed. We can stop
+//            // scanning here.
+//            //
+//            // NB!!! Many instructions only modify some flags. LLVM currently
+//            // models this as clobbering all flags, but if that ever changes
+//            // this will need to be carefully updated to handle that more
+//            // complex logic.
+//            FlagsKilled = true;
+//            break;
+//          }
+//          continue;
+//        }
+//
+//        LLVM_DEBUG(dbgs() << "  Rewriting use: "; MI.dump());
+//
+//        // Check the kill flag before we rewrite as that may change it.
+//        if (FlagUse->isKill())
+//          FlagsKilled = true;
+//
+//        // Once we encounter a branch, the rest of the instructions must also be
+//        // branches. We can't rewrite in place here, so we handle them below.
+//        //
+//        // Note that we don't have to handle tail calls here, even conditional
+//        // tail calls, as those are not introduced into the X86 MI until post-RA
+//        // branch folding or black placement. As a consequence, we get to deal
+//        // with the simpler formulation of conditional branches followed by tail
+//        // calls.
+//        if (X86::getCondFromBranch(MI) != X86::COND_INVALID) {
+//          auto JmpIt = MI.getIterator();
+//          do {
+//            JmpIs.push_back(&*JmpIt);
+//            ++JmpIt;
+//          } while (JmpIt != UseMBB.instr_end() &&
+//                   X86::getCondFromBranch(*JmpIt) !=
+//                       X86::COND_INVALID);
+//          break;
+//        }
+//
+//        // Otherwise we can just rewrite in-place.
+//        if (X86::getCondFromCMov(MI) != X86::COND_INVALID) {
+//          rewriteCMov(*TestMBB, TestPos, TestLoc, MI, *FlagUse, CondRegs);
+//        } else if (X86::getCondFromSETCC(MI) != X86::COND_INVALID) {
+//          rewriteSetCC(*TestMBB, TestPos, TestLoc, MI, *FlagUse, CondRegs);
+//        } else if (MI.getOpcode() == TargetOpcode::COPY) {
+//          rewriteCopy(MI, *FlagUse, CopyDefI);
+//        } else {
+//          // We assume all other instructions that use flags also def them.
+//          assert(MI.findRegisterDefOperand(X86::EFLAGS) &&
+//                 "Expected a def of EFLAGS for this instruction!");
+//
+//          // NB!!! Several arithmetic instructions only *partially* update
+//          // flags. Theoretically, we could generate MI code sequences that
+//          // would rely on this fact and observe different flags independently.
+//          // But currently LLVM models all of these instructions as clobbering
+//          // all the flags in an undef way. We rely on that to simplify the
+//          // logic.
+//          FlagsKilled = true;
+//
+//          switch (MI.getOpcode()) {
+//          case X86::SETB_C8r:
+//          case X86::SETB_C16r:
+//          case X86::SETB_C32r:
+//          case X86::SETB_C64r:
+//            // Use custom lowering for arithmetic that is merely extending the
+//            // carry flag. We model this as the SETB_C* pseudo instructions.
+//            rewriteSetCarryExtended(*TestMBB, TestPos, TestLoc, MI, *FlagUse,
+//                                    CondRegs);
+//            break;
+//
+//          default:
+//            // Generically handle remaining uses as arithmetic instructions.
+//            rewriteArithmetic(*TestMBB, TestPos, TestLoc, MI, *FlagUse,
+//                              CondRegs);
+//            break;
+//          }
+//          break;
+//        }
+//
+//        // If this was the last use of the flags, we're done.
+//        if (FlagsKilled)
+//          break;
+//      }
+//
+//      // If the flags were killed, we're done with this block.
+//      if (FlagsKilled)
+//        continue;
+//
+//      // Otherwise we need to scan successors for ones where the flags live-in
+//      // and queue those up for processing.
+//      for (MachineBasicBlock *SuccMBB : UseMBB.successors())
+//        if (SuccMBB->isLiveIn(X86::EFLAGS) &&
+//            VisitedBlocks.insert(SuccMBB).second) {
+//          // We currently don't do any PHI insertion and so we require that the
+//          // test basic block dominates all of the use basic blocks. Further, we
+//          // can't have a cycle from the test block back to itself as that would
+//          // create a cycle requiring a PHI to break it.
+//          //
+//          // We could in theory do PHI insertion here if it becomes useful by
+//          // just taking undef values in along every edge that we don't trace
+//          // this EFLAGS copy along. This isn't as bad as fully general PHI
+//          // insertion, but still seems like a great deal of complexity.
+//          //
+//          // Because it is theoretically possible that some earlier MI pass or
+//          // other lowering transformation could induce this to happen, we do
+//          // a hard check even in non-debug builds here.
+//          if (SuccMBB == TestMBB || !MDT->dominates(TestMBB, SuccMBB)) {
+//            LLVM_DEBUG({
+//              dbgs()
+//                  << "ERROR: Encountered use that is not dominated by our test "
+//                     "basic block! Rewriting this would require inserting PHI "
+//                     "nodes to track the flag state across the CFG.\n\nTest "
+//                     "block:\n";
+//              TestMBB->dump();
+//              dbgs() << "Use block:\n";
+//              SuccMBB->dump();
+//            });
+//            report_fatal_error(
+//                "Cannot lower EFLAGS copy when original copy def "
+//                "does not dominate all uses.");
+//          }
+//
+//          Blocks.push_back(SuccMBB);
+//        }
+//    } while (!Blocks.empty());
+//
+//    // Now rewrite the jumps that use the flags. These we handle specially
+//    // because if there are multiple jumps in a single basic block we'll have
+//    // to do surgery on the CFG.
+//    MachineBasicBlock *LastJmpMBB = nullptr;
+//    for (MachineInstr *JmpI : JmpIs) {
+//      // Past the first jump within a basic block we need to split the blocks
+//      // apart.
+//      if (JmpI->getParent() == LastJmpMBB)
+//        splitBlock(*JmpI->getParent(), *JmpI, *TII);
+//      else
+//        LastJmpMBB = JmpI->getParent();
+//
+//      rewriteCondJmp(*TestMBB, TestPos, TestLoc, *JmpI, CondRegs);
+//    }
+//
+//    // FIXME: Mark the last use of EFLAGS before the copy's def as a kill if
+//    // the copy's def operand is itself a kill.
+//  }
+//
+//#ifndef NDEBUG
+//  for (MachineBasicBlock &MBB : MF)
+//    for (MachineInstr &MI : MBB)
+//      if (MI.getOpcode() == TargetOpcode::COPY &&
+//          (MI.getOperand(0).getReg() == X86::EFLAGS ||
+//           MI.getOperand(1).getReg() == X86::EFLAGS)) {
+//        LLVM_DEBUG(dbgs() << "ERROR: Found a COPY involving EFLAGS: ";
+//                   MI.dump());
+//        llvm_unreachable("Unlowered EFLAGS copy!");
+//      }
+//#endif
+//
+//  return true;
+//}
 
 /// Collect any conditions that have already been set in registers so that we
 /// can re-use them rather than adding duplicates.

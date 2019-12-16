@@ -37,6 +37,7 @@
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetOptions.h"
 #include <algorithm>
+
 using namespace llvm;
 
 #define DEBUG_TYPE "function-lowering-info"
@@ -345,43 +346,19 @@ void FunctionLoweringInfo::set(const MEFBody &fn, MachineFunction &mf,
 
   // If this personality uses funclets, we need to do a bit more work.
   DenseMap<const AllocaInst *, TinyPtrVector<int *>> CatchObjects;
-//  EHPersonality Personality = classifyEHPersonality(
-//          /*FnBody->hasPersonalityFn() ? FnBody->getPersonalityFn() :*/ nullptr);
-//  if (isFuncletEHPersonality(Personality)) {
-//    // Calculate state numbers if we haven't already.
-//    WinEHFuncInfo &EHInfo = *MF->getWinEHFuncInfo();
-//    if (Personality == EHPersonality::MSVC_CXX)
-//      calculateWinCXXEHStateNumbers(&fn, EHInfo);
-//    else if (isAsynchronousEHPersonality(Personality))
-//      calculateSEHStateNumbers(&fn, EHInfo);
-//    else if (Personality == EHPersonality::CoreCLR)
-//      calculateClrEHStateNumbers(&fn, EHInfo);
-//
-//    // Map all BB references in the WinEH data to MBBs.
-//    for (WinEHTryBlockMapEntry &TBME : EHInfo.TryBlockMap) {
-//      for (WinEHHandlerType &H : TBME.HandlerArray) {
-//        if (const AllocaInst *AI = H.CatchObj.Alloca)
-//          CatchObjects.insert({AI, {}}).first->second.push_back(
-//              &H.CatchObj.FrameIndex);
-//        else
-//          H.CatchObj.FrameIndex = INT_MAX;
-//      }
-//    }
-//  }
-//  if (Personality == EHPersonality::Wasm_CXX) {
-//    WasmEHFuncInfo &EHInfo = *MF->getWasmEHFuncInfo();
-//    calculateWasmEHInfo(&fn, EHInfo);
-//  }
+
 
   // Initialize the mapping of values to registers.  This is only set up for
   // instruction values that are used outside of the block that defines
   // them.
   for (const BasicBlock &BB : *FnBody) {
-    for (const Instruction &I : BB) {
+
+      for (const Instruction &I : BB) {
       if (const AllocaInst *AI = dyn_cast<AllocaInst>(&I)) {
-        Type *Ty = AI->getAllocatedType();
-        unsigned Align =
-          std::max((unsigned)MF->getDataLayout().getPrefTypeAlignment(Ty),
+          Type *Ty = AI->getAllocatedType();
+
+          unsigned Align =
+          std::max((unsigned)MF->getDataLayoutMEF().getPrefTypeAlignment(Ty),
                    AI->getAlignment());
 
         // Static allocas can be folded into the initial stack frame
@@ -390,7 +367,7 @@ void FunctionLoweringInfo::set(const MEFBody &fn, MachineFunction &mf,
         if (AI->isStaticAlloca() &&
             (TFI->isStackRealignable() || (Align <= StackAlign))) {
           const ConstantInt *CUI = cast<ConstantInt>(AI->getArraySize());
-          uint64_t TySize = MF->getDataLayout().getTypeAllocSize(Ty);
+          uint64_t TySize = MF->getDataLayoutMEF().getTypeAllocSize(Ty);
 
           TySize *= CUI->getZExtValue();   // Get total allocated size.
           if (TySize == 0) TySize = 1; // Don't create zero-sized stack objects.
@@ -421,8 +398,7 @@ void FunctionLoweringInfo::set(const MEFBody &fn, MachineFunction &mf,
           MF->getFrameInfo().CreateVariableSizedObject(Align ? Align : 1, AI);
         }
       }
-
-      // Look for inline asm that clobbers the SP register.
+          // Look for inline asm that clobbers the SP register.
       if (isa<CallInst>(I) || isa<InvokeInst>(I)) {
         ImmutableCallSite CS(&I);
         if (isa<InlineAsm>(CS.getCalledValue())) {
@@ -463,9 +439,10 @@ void FunctionLoweringInfo::set(const MEFBody &fn, MachineFunction &mf,
       // a virtual register for them.
       if (isUsedOutsideOfDefiningBlock(&I))
         if (!isa<AllocaInst>(I) || !StaticAllocaMap.count(cast<AllocaInst>(&I)))
-          InitializeRegForValue(&I);
+          InitializeRegForValueMEF(&I);
 
-      // Decide the preferred extend type for a value.
+
+          // Decide the preferred extend type for a value.
       PreferredExtendType[&I] = getPreferredExtendForValue(&I);
     }
   }
@@ -525,7 +502,7 @@ void FunctionLoweringInfo::set(const MEFBody &fn, MachineFunction &mf,
       assert(PHIReg && "PHI node does not have an assigned virtual register!");
 
       SmallVector<EVT, 4> ValueVTs;
-      ComputeValueVTs(*TLI, MF->getDataLayout(), PN.getType(), ValueVTs);
+      ComputeValueVTs(*TLI, MF->getDataLayoutMEF(), PN.getType(), ValueVTs);
       for (EVT VT : ValueVTs) {
         unsigned NumRegisters = TLI->getNumRegisters(FnBody->getContext(), VT);
         const TargetInstrInfo *TII = MF->getSubtarget().getInstrInfo();
@@ -624,9 +601,32 @@ unsigned FunctionLoweringInfo::CreateRegs(Type *Ty, bool isDivergent) {
   }
   return FirstReg;
 }
+unsigned FunctionLoweringInfo::CreateRegsMEF(Type *Ty, bool isDivergent) {
+  const TargetLowering *TLI = MF->getSubtarget().getTargetLowering();
+
+  SmallVector<EVT, 4> ValueVTs;
+  ComputeValueVTs(*TLI, MF->getDataLayoutMEF(), Ty, ValueVTs);
+
+  unsigned FirstReg = 0;
+  for (unsigned Value = 0, e = ValueVTs.size(); Value != e; ++Value) {
+    EVT ValueVT = ValueVTs[Value];
+    MVT RegisterVT = TLI->getRegisterType(Ty->getContext(), ValueVT);
+
+    unsigned NumRegs = TLI->getNumRegisters(Ty->getContext(), ValueVT);
+    for (unsigned i = 0; i != NumRegs; ++i) {
+      unsigned R = CreateReg(RegisterVT, isDivergent);
+      if (!FirstReg) FirstReg = R;
+    }
+  }
+  return FirstReg;
+}
 
 unsigned FunctionLoweringInfo::CreateRegs(const Value *V) {
   return CreateRegs(V->getType(), DA && !TLI->requiresUniformRegister(*MF, V) &&
+                                      DA->isDivergent(V));
+}
+unsigned FunctionLoweringInfo::CreateRegsMEF(const Value *V) {
+  return CreateRegsMEF(V->getType(), DA && !TLI->requiresUniformRegister(*MF, V) &&
                                       DA->isDivergent(V));
 }
 

@@ -66,6 +66,36 @@ bool EdgeBundles::runOnMachineFunction(MachineFunction &mf) {
 
   return false;
 }
+bool EdgeBundles::runOnMachineFunctionMEF(MachineFunction &mf) {
+  MF = &mf;
+  EC.clear();
+  EC.grow(2 * MF->getNumBlockIDs());
+
+  for (const auto &MBB : *MF) {
+    unsigned OutE = 2 * MBB.getNumber() + 1;
+    // Join the outgoing bundle with the ingoing bundles of all successors.
+    for (MachineBasicBlock::const_succ_iterator SI = MBB.succ_begin(),
+           SE = MBB.succ_end(); SI != SE; ++SI)
+      EC.join(OutE, 2 * (*SI)->getNumber());
+  }
+  EC.compress();
+  if (ViewEdgeBundles)
+    view();
+
+  // Compute the reverse mapping.
+  Blocks.clear();
+  Blocks.resize(getNumBundles());
+
+  for (unsigned i = 0, e = MF->getNumBlockIDs(); i != e; ++i) {
+    unsigned b0 = getBundle(i, false);
+    unsigned b1 = getBundle(i, true);
+    Blocks[b0].push_back(i);
+    if (b1 != b0)
+      Blocks[b1].push_back(i);
+  }
+
+  return false;
+}
 
 /// Specialize WriteGraph, the standard implementation won't work.
 namespace llvm {

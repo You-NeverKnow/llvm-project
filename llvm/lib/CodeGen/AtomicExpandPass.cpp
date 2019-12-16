@@ -492,8 +492,6 @@ bool AtomicExpand::runOnFunctionMEF(MEFBody &B) {
     }
   }
 
-  // debug
-  std::cout << "AtomicExpandPass for MEF successful" << '\n';
 
   return MadeChange;
 }

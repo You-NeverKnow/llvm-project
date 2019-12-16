@@ -167,6 +167,7 @@ public:
   void releaseMemory() override;
 
   bool runOnFunction(Function &) override;
+  bool runOnFunctionMEF(MEFBody &) override;
 
   void getAnalysisUsage(AnalysisUsage &AU) const override;
 

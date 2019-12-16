@@ -3655,6 +3655,10 @@ public:
                                    const TargetLibraryInfo *) const {
     return nullptr;
   }
+  virtual FastISel *createFastISelMEF(FunctionLoweringInfo &,
+                                   const TargetLibraryInfo *) const {
+    return nullptr;
+  }
 
   bool verifyReturnAddressArgumentIsConstant(SDValue Op,
                                              SelectionDAG &DAG) const;

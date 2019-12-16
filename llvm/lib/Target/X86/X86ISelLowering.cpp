@@ -3650,7 +3650,7 @@ SDValue X86TargetLowering::LowerFormalArgumentsMEF(
     if (Ins[I].Flags.isSRet()) {
       unsigned Reg = FuncInfo->getSRetReturnReg();
       if (!Reg) {
-        MVT PtrTy = getPointerTy(DAG.getDataLayout());
+        MVT PtrTy = getPointerTy(DAG.getDataLayoutMEF());
         Reg = MF.getRegInfo().createVirtualRegister(getRegClassFor(PtrTy));
         FuncInfo->setSRetReturnReg(Reg);
       }
@@ -3732,10 +3732,10 @@ SDValue X86TargetLowering::LowerFormalArgumentsMEF(
     // Store the integer parameter registers.
     SmallVector<SDValue, 8> MemOps;
     SDValue RSFIN = DAG.getFrameIndex(FuncInfo->getRegSaveFrameIndex(),
-                                      getPointerTy(DAG.getDataLayout()));
+                                      getPointerTy(DAG.getDataLayoutMEF()));
     unsigned Offset = FuncInfo->getVarArgsGPOffset();
     for (SDValue Val : LiveGPRs) {
-      SDValue FIN = DAG.getNode(ISD::ADD, dl, getPointerTy(DAG.getDataLayout()),
+      SDValue FIN = DAG.getNode(ISD::ADD, dl, getPointerTy(DAG.getDataLayoutMEF()),
                                 RSFIN, DAG.getIntPtrConstant(Offset, dl));
       SDValue Store =
           DAG.getStore(Val.getValue(1), dl, Val, FIN,
@@ -3867,7 +3867,7 @@ SDValue X86TargetLowering::LowerMemOpCallTo(SDValue Chain, SDValue StackPtr,
                                             ISD::ArgFlagsTy Flags) const {
   unsigned LocMemOffset = VA.getLocMemOffset();
   SDValue PtrOff = DAG.getIntPtrConstant(LocMemOffset, dl);
-  PtrOff = DAG.getNode(ISD::ADD, dl, getPointerTy(DAG.getDataLayout()),
+  PtrOff = DAG.getNode(ISD::ADD, dl, getPointerTy(DAG.getDataLayoutMEF()),
                        StackPtr, PtrOff);
   if (Flags.isByVal())
     return CreateCopyOfByValArgument(Arg, PtrOff, Chain, Flags, DAG, dl);
@@ -4820,6 +4820,12 @@ FastISel *
 X86TargetLowering::createFastISel(FunctionLoweringInfo &funcInfo,
                                   const TargetLibraryInfo *libInfo) const {
   return X86::createFastISel(funcInfo, libInfo);
+}
+
+FastISel *
+X86TargetLowering::createFastISelMEF(FunctionLoweringInfo &funcInfo,
+                                  const TargetLibraryInfo *libInfo) const {
+  return X86::createFastISelMEF(funcInfo, libInfo);
 }
 
 //===----------------------------------------------------------------------===//

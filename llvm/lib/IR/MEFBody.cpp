@@ -36,9 +36,6 @@ void MEFBody::RegisterEntry(MEFEntry *entry) {
         builder.CreateSwitch(value, &entry->getEntryBlock());
     }
     Entries.insert(entry);
-    // Debug -- iterable
-//    std::cout << "Entries: " << Entries.size() << "= ";
-//    for(auto& var: Entries) std::cout << var << " "; std::cout << '\n';
 
 }
 

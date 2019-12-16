@@ -366,7 +366,7 @@ bool DominatorTreeWrapperPass::runOnFunction(Function &F) {
 }
 
 bool DominatorTreeWrapperPass::runOnFunctionMEF(MEFBody &B) {
-//  DT.recalculate(B);
+  DT.recalculate(B);
   return false;
 }
 

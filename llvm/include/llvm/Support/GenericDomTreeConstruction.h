@@ -43,7 +43,6 @@
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/GenericDomTree.h"
-
 #define DEBUG_TYPE "dom-tree-builder"
 
 namespace llvm {
@@ -377,6 +376,11 @@ struct SemiNCAInfo {
     return GraphTraits<typename DomTreeT::ParentPtr>::getEntryNode(DT.Parent);
   }
 
+  static NodePtr GetEntryNodeMEF(const DomTreeT &DT) {
+    assert(DT.ParentMEF && "Parent not set");
+    return GraphTraits<MEFBody*>::getEntryNode(DT.ParentMEF);
+  }
+
   // Finds all roots without relaying on the set of roots already stored in the
   // tree.
   // We define roots to be some non-redundant set of the CFG nodes
@@ -386,11 +390,133 @@ struct SemiNCAInfo {
 
     // For dominators, function entry CFG node is always a tree root node.
     if (!IsPostDom) {
-      Roots.push_back(GetEntryNode(DT));
-      return Roots;
+        Roots.push_back(GetEntryNode(DT));
+        return Roots;
     }
 
-    SemiNCAInfo SNCA(BUI);
+      SemiNCAInfo SNCA(BUI);
+
+    // PostDominatorTree always has a virtual root.
+    SNCA.addVirtualRoot();
+    unsigned Num = 1;
+
+    LLVM_DEBUG(dbgs() << "\t\tLooking for trivial roots\n");
+
+    // Step #1: Find all the trivial roots that are going to will definitely
+    // remain tree roots.
+    unsigned Total = 0;
+    // It may happen that there are some new nodes in the CFG that are result of
+    // the ongoing batch update, but we cannot really pretend that they don't
+    // exist -- we won't see any outgoing or incoming edges to them, so it's
+    // fine to discover them here, as they would end up appearing in the CFG at
+    // some point anyway.
+    for (const NodePtr N : nodes(DT.Parent)) {
+      ++Total;
+      // If it has no *successors*, it is definitely a root.
+      if (!HasForwardSuccessors(N, BUI)) {
+        Roots.push_back(N);
+        // Run DFS not to walk this part of CFG later.
+        Num = SNCA.runDFS(N, Num, AlwaysDescend, 1);
+        LLVM_DEBUG(dbgs() << "Found a new trivial root: " << BlockNamePrinter(N)
+                          << "\n");
+        LLVM_DEBUG(dbgs() << "Last visited node: "
+                          << BlockNamePrinter(SNCA.NumToNode[Num]) << "\n");
+      }
+    }
+
+    LLVM_DEBUG(dbgs() << "\t\tLooking for non-trivial roots\n");
+
+    // Step #2: Find all non-trivial root candidates. Those are CFG nodes that
+    // are reverse-unreachable were not visited by previous DFS walks (i.e. CFG
+    // nodes in infinite loops).
+    bool HasNonTrivialRoots = false;
+    // Accounting for the virtual exit, see if we had any reverse-unreachable
+    // nodes.
+    if (Total + 1 != Num) {
+      HasNonTrivialRoots = true;
+      // Make another DFS pass over all other nodes to find the
+      // reverse-unreachable blocks, and find the furthest paths we'll be able
+      // to make.
+      // Note that this looks N^2, but it's really 2N worst case, if every node
+      // is unreachable. This is because we are still going to only visit each
+      // unreachable node once, we may just visit it in two directions,
+      // depending on how lucky we get.
+      SmallPtrSet<NodePtr, 4> ConnectToExitBlock;
+      for (const NodePtr I : nodes(DT.Parent)) {
+        if (SNCA.NodeToInfo.count(I) == 0) {
+          LLVM_DEBUG(dbgs()
+                     << "\t\t\tVisiting node " << BlockNamePrinter(I) << "\n");
+          // Find the furthest away we can get by following successors, then
+          // follow them in reverse.  This gives us some reasonable answer about
+          // the post-dom tree inside any infinite loop. In particular, it
+          // guarantees we get to the farthest away point along *some*
+          // path. This also matches the GCC's behavior.
+          // If we really wanted a totally complete picture of dominance inside
+          // this infinite loop, we could do it with SCC-like algorithms to find
+          // the lowest and highest points in the infinite loop.  In theory, it
+          // would be nice to give the canonical backedge for the loop, but it's
+          // expensive and does not always lead to a minimal set of roots.
+          LLVM_DEBUG(dbgs() << "\t\t\tRunning forward DFS\n");
+
+          const unsigned NewNum = SNCA.runDFS<true>(I, Num, AlwaysDescend, Num);
+          const NodePtr FurthestAway = SNCA.NumToNode[NewNum];
+          LLVM_DEBUG(dbgs() << "\t\t\tFound a new furthest away node "
+                            << "(non-trivial root): "
+                            << BlockNamePrinter(FurthestAway) << "\n");
+          ConnectToExitBlock.insert(FurthestAway);
+          Roots.push_back(FurthestAway);
+          LLVM_DEBUG(dbgs() << "\t\t\tPrev DFSNum: " << Num << ", new DFSNum: "
+                            << NewNum << "\n\t\t\tRemoving DFS info\n");
+          for (unsigned i = NewNum; i > Num; --i) {
+            const NodePtr N = SNCA.NumToNode[i];
+            LLVM_DEBUG(dbgs() << "\t\t\t\tRemoving DFS info for "
+                              << BlockNamePrinter(N) << "\n");
+            SNCA.NodeToInfo.erase(N);
+            SNCA.NumToNode.pop_back();
+          }
+          const unsigned PrevNum = Num;
+          LLVM_DEBUG(dbgs() << "\t\t\tRunning reverse DFS\n");
+          Num = SNCA.runDFS(FurthestAway, Num, AlwaysDescend, 1);
+          for (unsigned i = PrevNum + 1; i <= Num; ++i)
+            LLVM_DEBUG(dbgs() << "\t\t\t\tfound node "
+                              << BlockNamePrinter(SNCA.NumToNode[i]) << "\n");
+        }
+      }
+    }
+
+    LLVM_DEBUG(dbgs() << "Total: " << Total << ", Num: " << Num << "\n");
+    LLVM_DEBUG(dbgs() << "Discovered CFG nodes:\n");
+    LLVM_DEBUG(for (size_t i = 0; i <= Num; ++i) dbgs()
+               << i << ": " << BlockNamePrinter(SNCA.NumToNode[i]) << "\n");
+
+    assert((Total + 1 == Num) && "Everything should have been visited");
+
+    // Step #3: If we found some non-trivial roots, make them non-redundant.
+    if (HasNonTrivialRoots) RemoveRedundantRoots(DT, BUI, Roots);
+
+    LLVM_DEBUG(dbgs() << "Found roots: ");
+    LLVM_DEBUG(for (auto *Root
+                    : Roots) dbgs()
+               << BlockNamePrinter(Root) << " ");
+    LLVM_DEBUG(dbgs() << "\n");
+
+    return Roots;
+  }
+  // Finds all roots without relaying on the set of roots already stored in the
+  // tree.
+  // We define roots to be some non-redundant set of the CFG nodes
+
+  static RootsT FindRootsMEF(const DomTreeT &DT, BatchUpdatePtr BUI) {
+    assert(DT.ParentMEF && "Parent pointer is not set");
+    RootsT Roots;
+
+    // For dominators, function entry CFG node is always a tree root node.
+    if (!IsPostDom) {
+        Roots.push_back(GetEntryNodeMEF(DT));
+        return Roots;
+    }
+
+      SemiNCAInfo SNCA(BUI);
 
     // PostDominatorTree always has a virtual root.
     SNCA.addVirtualRoot();
@@ -565,14 +691,44 @@ struct SemiNCAInfo {
     DT.Parent = Parent;
     SemiNCAInfo SNCA(nullptr);  // Since we are rebuilding the whole tree,
                                 // there's no point doing it incrementally.
-
     // Step #0: Number blocks in depth-first order and initialize variables used
     // in later stages of the algorithm.
     DT.Roots = FindRoots(DT, nullptr);
     SNCA.doFullDFSWalk(DT, AlwaysDescend);
 
     SNCA.runSemiNCA(DT);
-    if (BUI) {
+      if (BUI) {
+      BUI->IsRecalculated = true;
+      LLVM_DEBUG(
+          dbgs() << "DomTree recalculated, skipping future batch updates\n");
+    }
+
+    if (DT.Roots.empty()) return;
+
+    // Add a node for the root. If the tree is a PostDominatorTree it will be
+    // the virtual exit (denoted by (BasicBlock *) nullptr) which postdominates
+    // all real exits (including multiple exit blocks, infinite loops).
+    NodePtr Root = IsPostDom ? nullptr : DT.Roots[0];
+
+    DT.RootNode = (DT.DomTreeNodes[Root] =
+                       llvm::make_unique<DomTreeNodeBase<NodeT>>(Root, nullptr))
+        .get();
+    SNCA.attachNewSubtree(DT, DT.RootNode);
+  }
+
+  static void CalculateFromScratchMEF(DomTreeT &DT, BatchUpdatePtr BUI) {
+    auto *ParentMEF = DT.ParentMEF;
+    DT.reset();
+    DT.ParentMEF = ParentMEF;
+    SemiNCAInfo SNCA(nullptr);  // Since we are rebuilding the whole tree,
+                                // there's no point doing it incrementally.
+    // Step #0: Number blocks in depth-first order and initialize variables used
+    // in later stages of the algorithm.
+    DT.Roots = FindRootsMEF(DT, nullptr);
+    SNCA.doFullDFSWalk(DT, AlwaysDescend);
+
+    SNCA.runSemiNCA(DT);
+      if (BUI) {
       BUI->IsRecalculated = true;
       LLVM_DEBUG(
           dbgs() << "DomTree recalculated, skipping future batch updates\n");
@@ -1598,6 +1754,11 @@ struct SemiNCAInfo {
 template <class DomTreeT>
 void Calculate(DomTreeT &DT) {
   SemiNCAInfo<DomTreeT>::CalculateFromScratch(DT, nullptr);
+}
+
+template <class DomTreeT>
+void CalculateMEF(DomTreeT &DT) {
+  SemiNCAInfo<DomTreeT>::CalculateFromScratchMEF(DT, nullptr);
 }
 
 template <typename DomTreeT>

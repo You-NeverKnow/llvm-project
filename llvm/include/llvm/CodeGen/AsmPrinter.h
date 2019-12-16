@@ -335,6 +335,7 @@ public:
   /// Print assembly representations of the jump tables used by the current
   /// function to the current output stream.
   virtual void EmitJumpTableInfo();
+  virtual void EmitJumpTableInfoMEF();
 
   /// Emit the specified global variable to the .s file.
   virtual void EmitGlobalVariable(const GlobalVariable *GV);
@@ -410,6 +411,9 @@ public:
 
   /// Targets should implement this to emit instructions.
   virtual void EmitInstruction(const MachineInstr *) {
+    llvm_unreachable("EmitInstruction not implemented");
+  }
+  virtual void EmitInstructionMEF(const MachineInstr *) {
     llvm_unreachable("EmitInstruction not implemented");
   }
 

@@ -1323,11 +1323,9 @@ void AsmPrinter::EmitFunctionBodyMEF() {
 //      MLI = OwnedMLI.get();
 //    }
 //  }
-    std::cout << "Starting up..." << '\n' << std::endl;
   // Print out code for the function.
   bool HasAnyRealCode = false;
   int NumInstsInFunction = 0;
-    std::cout << "MF: " << MF << std::endl;
     for (auto &MBB : *MF) {
     // Print a label for the basic block.
 //      std::cout << "Start ...." << '\n' << std::endl;
@@ -1377,13 +1375,13 @@ void AsmPrinter::EmitFunctionBodyMEF() {
       case TargetOpcode::DBG_VALUE:
         if (isVerbose()) {
           if (!emitDebugValueComment(&MI, *this))
-            EmitInstruction(&MI);
+            EmitInstructionMEF(&MI);
         }
         break;
       case TargetOpcode::DBG_LABEL:
         if (isVerbose()) {
           if (!emitDebugLabelComment(&MI, *this))
-            EmitInstruction(&MI);
+            EmitInstructionMEF(&MI);
         }
         break;
       case TargetOpcode::IMPLICIT_DEF:
@@ -1393,7 +1391,7 @@ void AsmPrinter::EmitFunctionBodyMEF() {
         if (isVerbose()) emitKill(&MI, *this);
         break;
       default:
-        EmitInstruction(&MI);
+        EmitInstructionMEF(&MI);
         break;
       }
 
@@ -1413,9 +1411,6 @@ void AsmPrinter::EmitFunctionBodyMEF() {
 
     EmitBasicBlockEndMEF(MBB);
   }
-    // debug
-    std::cout << "All BBs done" << '\n' << std::endl;
-
   EmittedInsts += NumInstsInFunction;
 //  MachineOptimizationRemarkAnalysis R(DEBUG_TYPE, "InstructionCount",
 //                                      MF->getFunction().getSubprogram(),
@@ -1446,7 +1441,6 @@ void AsmPrinter::EmitFunctionBodyMEF() {
     }
   }
 
-    std::cout << "...Iterating over real bb" << '\n' << std::endl;
     const MEFBody *FnBody = MF->getFunctionMEF();
   for (const auto &BB : *FnBody) {
     if (!BB.hasAddressTaken())
@@ -1457,19 +1451,16 @@ void AsmPrinter::EmitFunctionBodyMEF() {
     OutStreamer->AddComment("Address of block that was removed by CodeGen");
     OutStreamer->EmitLabel(Sym);
   }
-    std::cout << "...Finishing up" << '\n' << std::endl;
 
   // Emit target-specific gunk after the function body.
   EmitFunctionBodyEnd();
 
-    std::cout << "...Finishing up2" << '\n' << std::endl;
 //  if (needFuncLabelsForEHOrDebugInfo(*MF, MMI) ||
 //      MAI->hasDotTypeDotSizeDirective()) {
 //    // Create a symbol for the end of function.
 //    CurrentFnEnd = createTempSymbol("func_end");
 //    OutStreamer->EmitLabel(CurrentFnEnd);
 //  }
-    std::cout << "...Finishing up3" << '\n' << std::endl;
 
   // If the target wants a .size directive for the size of the function, emit
   // it. ::TODO:: Might need to implement if file has > 1 MEF function
@@ -1481,18 +1472,15 @@ void AsmPrinter::EmitFunctionBodyMEF() {
 //        MCSymbolRefExpr::create(CurrentFnSymForSize, OutContext), OutContext);
 //    OutStreamer->emitELFSize(CurrentFnSym, SizeExp);
 //  }
-    std::cout << "...Finishing up4" << '\n' << std::endl;
 
   for (const HandlerInfo &HI : Handlers) {
     NamedRegionTimer T(HI.TimerName, HI.TimerDescription, HI.TimerGroupName,
                        HI.TimerGroupDescription, TimePassesIsEnabled);
     HI.Handler->markFunctionEnd();
   }
-    std::cout << "...Finishing up5" << '\n' << std::endl;
-
 
     // Print out jump tables referenced by the function.
-  EmitJumpTableInfo();
+  EmitJumpTableInfoMEF();
 
   // Emit post-function debug and/or EH information.
   for (const HandlerInfo &HI : Handlers) {
@@ -2092,6 +2080,78 @@ void AsmPrinter::EmitConstantPool() {
 /// by the current function to the current output stream.
 void AsmPrinter::EmitJumpTableInfo() {
   const DataLayout &DL = MF->getDataLayout();
+  const MachineJumpTableInfo *MJTI = MF->getJumpTableInfo();
+  if (!MJTI) return;
+  if (MJTI->getEntryKind() == MachineJumpTableInfo::EK_Inline) return;
+  const std::vector<MachineJumpTableEntry> &JT = MJTI->getJumpTables();
+  if (JT.empty()) return;
+
+  // Pick the directive to use to print the jump table entries, and switch to
+  // the appropriate section.
+  const Function &F = MF->getFunction();
+  const TargetLoweringObjectFile &TLOF = getObjFileLowering();
+  bool JTInDiffSection = !TLOF.shouldPutJumpTableInFunctionSection(
+      MJTI->getEntryKind() == MachineJumpTableInfo::EK_LabelDifference32,
+      F);
+  if (JTInDiffSection) {
+    // Drop it in the readonly section.
+    MCSection *ReadOnlySection = TLOF.getSectionForJumpTable(F, TM);
+    OutStreamer->SwitchSection(ReadOnlySection);
+  }
+
+  EmitAlignment(Log2_32(MJTI->getEntryAlignment(DL)));
+
+  // Jump tables in code sections are marked with a data_region directive
+  // where that's supported.
+  if (!JTInDiffSection)
+    OutStreamer->EmitDataRegion(MCDR_DataRegionJT32);
+
+  for (unsigned JTI = 0, e = JT.size(); JTI != e; ++JTI) {
+    const std::vector<MachineBasicBlock*> &JTBBs = JT[JTI].MBBs;
+
+    // If this jump table was deleted, ignore it.
+    if (JTBBs.empty()) continue;
+
+    // For the EK_LabelDifference32 entry, if using .set avoids a relocation,
+    /// emit a .set directive for each unique entry.
+    if (MJTI->getEntryKind() == MachineJumpTableInfo::EK_LabelDifference32 &&
+        MAI->doesSetDirectiveSuppressReloc()) {
+      SmallPtrSet<const MachineBasicBlock*, 16> EmittedSets;
+      const TargetLowering *TLI = MF->getSubtarget().getTargetLowering();
+      const MCExpr *Base = TLI->getPICJumpTableRelocBaseExpr(MF,JTI,OutContext);
+      for (unsigned ii = 0, ee = JTBBs.size(); ii != ee; ++ii) {
+        const MachineBasicBlock *MBB = JTBBs[ii];
+        if (!EmittedSets.insert(MBB).second)
+          continue;
+
+        // .set LJTSet, LBB32-base
+        const MCExpr *LHS =
+          MCSymbolRefExpr::create(MBB->getSymbol(), OutContext);
+        OutStreamer->EmitAssignment(GetJTSetSymbol(JTI, MBB->getNumber()),
+                                    MCBinaryExpr::createSub(LHS, Base,
+                                                            OutContext));
+      }
+    }
+
+    // On some targets (e.g. Darwin) we want to emit two consecutive labels
+    // before each jump table.  The first label is never referenced, but tells
+    // the assembler and linker the extents of the jump table object.  The
+    // second label is actually referenced by the code.
+    if (JTInDiffSection && DL.hasLinkerPrivateGlobalPrefix())
+      // FIXME: This doesn't have to have any specific name, just any randomly
+      // named and numbered 'l' label would work.  Simplify GetJTISymbol.
+      OutStreamer->EmitLabel(GetJTISymbol(JTI, true));
+
+    OutStreamer->EmitLabel(GetJTISymbol(JTI));
+
+    for (unsigned ii = 0, ee = JTBBs.size(); ii != ee; ++ii)
+      EmitJumpTableEntry(MJTI, JTBBs[ii], JTI);
+  }
+  if (!JTInDiffSection)
+    OutStreamer->EmitDataRegion(MCDR_DataRegionEnd);
+}
+void AsmPrinter::EmitJumpTableInfoMEF() {
+  const DataLayout &DL = MF->getDataLayoutMEF();
   const MachineJumpTableInfo *MJTI = MF->getJumpTableInfo();
   if (!MJTI) return;
   if (MJTI->getEntryKind() == MachineJumpTableInfo::EK_Inline) return;

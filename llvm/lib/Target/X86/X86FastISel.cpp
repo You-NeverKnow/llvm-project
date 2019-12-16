@@ -64,8 +64,17 @@ public:
     X86ScalarSSEf64 = Subtarget->hasSSE2();
     X86ScalarSSEf32 = Subtarget->hasSSE1();
   }
+    // Reversed arguments to overload this Function for MEF datalayout() in FastISel
+  explicit X86FastISel(const TargetLibraryInfo *libInfo,
+                        FunctionLoweringInfo &funcInfo)
+      : FastISel(libInfo, funcInfo) {
+    Subtarget = &funcInfo.MF->getSubtarget<X86Subtarget>();
+    X86ScalarSSEf64 = Subtarget->hasSSE2();
+    X86ScalarSSEf32 = Subtarget->hasSSE1();
+  }
 
   bool fastSelectInstruction(const Instruction *I) override;
+  bool fastSelectInstructionMEF(const Instruction *I) override;
 
   /// The specified machine instr operand is a vreg, and that
   /// vreg is being provided by the specified load instruction.  If possible,
@@ -84,6 +93,8 @@ public:
 
 private:
   bool X86FastEmitCompare(const Value *LHS, const Value *RHS, EVT VT,
+                          const DebugLoc &DL);
+  bool X86FastEmitCompareMEF(const Value *LHS, const Value *RHS, EVT VT,
                           const DebugLoc &DL);
 
   bool X86FastEmitLoad(MVT VT, X86AddressMode &AM, MachineMemOperand *MMO,
@@ -114,6 +125,7 @@ private:
   bool X86SelectSExt(const Instruction *I);
 
   bool X86SelectBranch(const Instruction *I);
+  bool X86SelectBranchMEF(const Instruction *I);
 
   bool X86SelectShift(const Instruction *I);
 
@@ -1421,6 +1433,38 @@ bool X86FastISel::X86FastEmitCompare(const Value *Op0, const Value *Op1, EVT VT,
 
   return true;
 }
+bool X86FastISel::X86FastEmitCompareMEF(const Value *Op0, const Value *Op1, EVT VT,
+                                     const DebugLoc &CurDbgLoc) {
+  unsigned Op0Reg = getRegForValueMEF(Op0);
+  if (Op0Reg == 0) return false;
+
+  // Handle 'null' like i32/i64 0.
+  if (isa<ConstantPointerNull>(Op1))
+    Op1 = Constant::getNullValue(DL.getIntPtrType(Op0->getContext()));
+
+  // We have two options: compare with register or immediate.  If the RHS of
+  // the compare is an immediate that we can fold into this compare, use
+  // CMPri, otherwise use CMPrr.
+  if (const ConstantInt *Op1C = dyn_cast<ConstantInt>(Op1)) {
+    if (unsigned CompareImmOpc = X86ChooseCmpImmediateOpcode(VT, Op1C)) {
+      BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, CurDbgLoc, TII.get(CompareImmOpc))
+        .addReg(Op0Reg)
+        .addImm(Op1C->getSExtValue());
+      return true;
+    }
+  }
+
+  unsigned CompareOpc = X86ChooseCmpOpcode(VT, Subtarget);
+  if (CompareOpc == 0) return false;
+
+  unsigned Op1Reg = getRegForValueMEF(Op1);
+  if (Op1Reg == 0) return false;
+  BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, CurDbgLoc, TII.get(CompareOpc))
+    .addReg(Op0Reg)
+    .addReg(Op1Reg);
+
+  return true;
+}
 
 bool X86FastISel::X86SelectCmp(const Instruction *I) {
   const CmpInst *CI = cast<CmpInst>(I);
@@ -1689,6 +1733,160 @@ bool X86FastISel::X86SelectBranch(const Instruction *I) {
 
       // Emit a compare of the LHS and RHS, setting the flags.
       if (!X86FastEmitCompare(CmpLHS, CmpRHS, VT, CI->getDebugLoc()))
+        return false;
+
+      BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, DbgLoc, TII.get(X86::JCC_1))
+        .addMBB(TrueMBB).addImm(CC);
+
+      // X86 requires a second branch to handle UNE (and OEQ, which is mapped
+      // to UNE above).
+      if (NeedExtraBranch) {
+        BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, DbgLoc, TII.get(X86::JCC_1))
+          .addMBB(TrueMBB).addImm(X86::COND_P);
+      }
+
+      finishCondBranch(BI->getParent(), TrueMBB, FalseMBB);
+      return true;
+    }
+  } else if (TruncInst *TI = dyn_cast<TruncInst>(BI->getCondition())) {
+    // Handle things like "%cond = trunc i32 %X to i1 / br i1 %cond", which
+    // typically happen for _Bool and C++ bools.
+    MVT SourceVT;
+    if (TI->hasOneUse() && TI->getParent() == I->getParent() &&
+        isTypeLegal(TI->getOperand(0)->getType(), SourceVT)) {
+      unsigned TestOpc = 0;
+      switch (SourceVT.SimpleTy) {
+      default: break;
+      case MVT::i8:  TestOpc = X86::TEST8ri; break;
+      case MVT::i16: TestOpc = X86::TEST16ri; break;
+      case MVT::i32: TestOpc = X86::TEST32ri; break;
+      case MVT::i64: TestOpc = X86::TEST64ri32; break;
+      }
+      if (TestOpc) {
+        unsigned OpReg = getRegForValue(TI->getOperand(0));
+        if (OpReg == 0) return false;
+
+        BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, DbgLoc, TII.get(TestOpc))
+          .addReg(OpReg).addImm(1);
+
+        unsigned JmpCond = X86::COND_NE;
+        if (FuncInfo.MBB->isLayoutSuccessor(TrueMBB)) {
+          std::swap(TrueMBB, FalseMBB);
+          JmpCond = X86::COND_E;
+        }
+
+        BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, DbgLoc, TII.get(X86::JCC_1))
+          .addMBB(TrueMBB).addImm(JmpCond);
+
+        finishCondBranch(BI->getParent(), TrueMBB, FalseMBB);
+        return true;
+      }
+    }
+  } else if (foldX86XALUIntrinsic(CC, BI, BI->getCondition())) {
+    // Fake request the condition, otherwise the intrinsic might be completely
+    // optimized away.
+    unsigned TmpReg = getRegForValue(BI->getCondition());
+    if (TmpReg == 0)
+      return false;
+
+    BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, DbgLoc, TII.get(X86::JCC_1))
+      .addMBB(TrueMBB).addImm(CC);
+    finishCondBranch(BI->getParent(), TrueMBB, FalseMBB);
+    return true;
+  }
+
+  // Otherwise do a clumsy setcc and re-test it.
+  // Note that i1 essentially gets ANY_EXTEND'ed to i8 where it isn't used
+  // in an explicit cast, so make sure to handle that correctly.
+  unsigned OpReg = getRegForValue(BI->getCondition());
+  if (OpReg == 0) return false;
+
+  // In case OpReg is a K register, COPY to a GPR
+  if (MRI.getRegClass(OpReg) == &X86::VK1RegClass) {
+    unsigned KOpReg = OpReg;
+    OpReg = createResultReg(&X86::GR32RegClass);
+    BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, DbgLoc,
+            TII.get(TargetOpcode::COPY), OpReg)
+        .addReg(KOpReg);
+    OpReg = fastEmitInst_extractsubreg(MVT::i8, OpReg, /*Kill=*/true,
+                                       X86::sub_8bit);
+  }
+  BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, DbgLoc, TII.get(X86::TEST8ri))
+      .addReg(OpReg)
+      .addImm(1);
+  BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, DbgLoc, TII.get(X86::JCC_1))
+    .addMBB(TrueMBB).addImm(X86::COND_NE);
+  finishCondBranch(BI->getParent(), TrueMBB, FalseMBB);
+  return true;
+}
+bool X86FastISel::X86SelectBranchMEF(const Instruction *I) {
+  // Unconditional branches are selected by tablegen-generated code.
+  // Handle a conditional branch.
+  const BranchInst *BI = cast<BranchInst>(I);
+  MachineBasicBlock *TrueMBB = FuncInfo.MBBMap[BI->getSuccessor(0)];
+  MachineBasicBlock *FalseMBB = FuncInfo.MBBMap[BI->getSuccessor(1)];
+
+  // Fold the common case of a conditional branch with a comparison
+  // in the same block (values defined on other blocks may not have
+  // initialized registers).
+  X86::CondCode CC;
+  if (const CmpInst *CI = dyn_cast<CmpInst>(BI->getCondition())) {
+    if (CI->hasOneUse() && CI->getParent() == I->getParent()) {
+      EVT VT = TLI.getValueType(DL, CI->getOperand(0)->getType());
+
+      // Try to optimize or fold the cmp.
+      CmpInst::Predicate Predicate = optimizeCmpPredicate(CI);
+      switch (Predicate) {
+      default: break;
+      case CmpInst::FCMP_FALSE: fastEmitBranch(FalseMBB, DbgLoc); return true;
+      case CmpInst::FCMP_TRUE:  fastEmitBranch(TrueMBB, DbgLoc); return true;
+      }
+
+      const Value *CmpLHS = CI->getOperand(0);
+      const Value *CmpRHS = CI->getOperand(1);
+
+      // The optimizer might have replaced fcmp oeq %x, %x with fcmp ord %x,
+      // 0.0.
+      // We don't have to materialize a zero constant for this case and can just
+      // use %x again on the RHS.
+      if (Predicate == CmpInst::FCMP_ORD || Predicate == CmpInst::FCMP_UNO) {
+        const auto *CmpRHSC = dyn_cast<ConstantFP>(CmpRHS);
+        if (CmpRHSC && CmpRHSC->isNullValue())
+          CmpRHS = CmpLHS;
+      }
+
+      // Try to take advantage of fallthrough opportunities.
+      if (FuncInfo.MBB->isLayoutSuccessor(TrueMBB)) {
+        std::swap(TrueMBB, FalseMBB);
+        Predicate = CmpInst::getInversePredicate(Predicate);
+      }
+
+      // FCMP_OEQ and FCMP_UNE cannot be expressed with a single flag/condition
+      // code check. Instead two branch instructions are required to check all
+      // the flags. First we change the predicate to a supported condition code,
+      // which will be the first branch. Later one we will emit the second
+      // branch.
+      bool NeedExtraBranch = false;
+      switch (Predicate) {
+      default: break;
+      case CmpInst::FCMP_OEQ:
+        std::swap(TrueMBB, FalseMBB);
+        LLVM_FALLTHROUGH;
+      case CmpInst::FCMP_UNE:
+        NeedExtraBranch = true;
+        Predicate = CmpInst::FCMP_ONE;
+        break;
+      }
+
+      bool SwapArgs;
+      std::tie(CC, SwapArgs) = X86::getX86ConditionCode(Predicate);
+      assert(CC <= X86::LAST_VALID_COND && "Unexpected condition code.");
+
+      if (SwapArgs)
+        std::swap(CmpLHS, CmpRHS);
+
+      // Emit a compare of the LHS and RHS, setting the flags.
+      if (!X86FastEmitCompareMEF(CmpLHS, CmpRHS, VT, CI->getDebugLoc()))
         return false;
 
       BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, DbgLoc, TII.get(X86::JCC_1))
@@ -3677,6 +3875,89 @@ X86FastISel::fastSelectInstruction(const Instruction *I)  {
   return false;
 }
 
+bool
+X86FastISel::fastSelectInstructionMEF(const Instruction *I)  {
+  switch (I->getOpcode()) {
+  default: break;
+  case Instruction::Load:
+    return X86SelectLoad(I);
+  case Instruction::Store:
+    return X86SelectStore(I);
+  case Instruction::Ret:
+    return X86SelectRet(I);
+  case Instruction::ICmp:
+  case Instruction::FCmp:
+    return X86SelectCmp(I);
+  case Instruction::ZExt:
+    return X86SelectZExt(I);
+  case Instruction::SExt:
+    return X86SelectSExt(I);
+  case Instruction::Br:
+    return X86SelectBranchMEF(I);
+  case Instruction::LShr:
+  case Instruction::AShr:
+  case Instruction::Shl:
+    return X86SelectShift(I);
+  case Instruction::SDiv:
+  case Instruction::UDiv:
+  case Instruction::SRem:
+  case Instruction::URem:
+    return X86SelectDivRem(I);
+  case Instruction::Select:
+    return X86SelectSelect(I);
+  case Instruction::Trunc:
+    return X86SelectTrunc(I);
+  case Instruction::FPExt:
+    return X86SelectFPExt(I);
+  case Instruction::FPTrunc:
+    return X86SelectFPTrunc(I);
+  case Instruction::SIToFP:
+    return X86SelectSIToFP(I);
+  case Instruction::UIToFP:
+    return X86SelectUIToFP(I);
+  case Instruction::IntToPtr: // Deliberate fall-through.
+  case Instruction::PtrToInt: {
+    EVT SrcVT = TLI.getValueType(DL, I->getOperand(0)->getType());
+    EVT DstVT = TLI.getValueType(DL, I->getType());
+    if (DstVT.bitsGT(SrcVT))
+      return X86SelectZExt(I);
+    if (DstVT.bitsLT(SrcVT))
+      return X86SelectTrunc(I);
+    unsigned Reg = getRegForValue(I->getOperand(0));
+    if (Reg == 0) return false;
+    updateValueMap(I, Reg);
+    return true;
+  }
+  case Instruction::BitCast: {
+    // Select SSE2/AVX bitcasts between 128/256/512 bit vector types.
+    if (!Subtarget->hasSSE2())
+      return false;
+
+    MVT SrcVT, DstVT;
+    if (!isTypeLegal(I->getOperand(0)->getType(), SrcVT) ||
+        !isTypeLegal(I->getType(), DstVT))
+      return false;
+
+    // Only allow vectors that use xmm/ymm/zmm.
+    if (!SrcVT.isVector() || !DstVT.isVector() ||
+        SrcVT.getVectorElementType() == MVT::i1 ||
+        DstVT.getVectorElementType() == MVT::i1)
+      return false;
+
+    unsigned Reg = getRegForValue(I->getOperand(0));
+    if (Reg == 0)
+      return false;
+
+    // No instruction is needed for conversion. Reuse the register used by
+    // the fist operand.
+    updateValueMap(I, Reg);
+    return true;
+  }
+  }
+
+  return false;
+}
+
 unsigned X86FastISel::X86MaterializeInt(const ConstantInt *CI, MVT VT) {
   if (VT > MVT::i64)
     return 0;
@@ -4053,5 +4334,9 @@ namespace llvm {
   FastISel *X86::createFastISel(FunctionLoweringInfo &funcInfo,
                                 const TargetLibraryInfo *libInfo) {
     return new X86FastISel(funcInfo, libInfo);
+  }
+  FastISel *X86::createFastISelMEF(FunctionLoweringInfo &funcInfo,
+                                const TargetLibraryInfo *libInfo) {
+    return new X86FastISel(libInfo, funcInfo);
   }
 }

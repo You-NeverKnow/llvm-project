@@ -1643,15 +1643,10 @@ bool FPPassManager::runOnFunction(Function &F) {
 
   bool Changed = false;
   Module &M = *F.getParent();
+
   // Collect inherited analysis from Module level pass manager.
   populateInheritedAnalysis(TPM->activeStack);
-
-    // Debug -- iterable
-    std::cout << "PassVector FP = =================================";
-    for(auto& var: PassVector) std::cout << (std::string) var->getPassName() << ", "; std::cout << '\n';
-    std::cout << "PassVector = =================================";std::cout << '\n';
-
-    unsigned InstrCount, FunctionSize = 0;
+  unsigned InstrCount, FunctionSize = 0;
   StringMap<std::pair<unsigned, unsigned>> FunctionToInstrCount;
   bool EmitICRemark = M.shouldEmitInstrCountChangedRemark();
   // Collect the initial size of the module.
@@ -1776,6 +1771,9 @@ bool FPPassManager::runOnFunctionMEF(MEFBody &B) {
 bool FPPassManager::runOnModule(Module &M) {
   bool Changed = false;
 
+  // debug
+  std::cout << "Running Function Pass: " << (std::string) this->getPassName() << '\n';
+
   llvm::TimeTraceScope TimeScope("OptModule", M.getName());
   for (Function &F : M)
     Changed |= runOnFunction(F);
@@ -1821,10 +1819,6 @@ MPPassManager::runOnModule(Module &M) {
   llvm::TimeTraceScope TimeScope("OptModule", M.getName());
 
   bool Changed = false;
-    // Debug -- iterable
-    std::cout << "PassVector = =================================";
-    for(auto& var: PassVector) std::cout << (std::string) var->getPassName() << ", "; std::cout << '\n';
-    std::cout << "PassVector = =================================";std::cout << '\n';
 
   // Initialize on-the-fly passes
   for (auto &OnTheFlyManager : OnTheFlyManagers) {
@@ -1904,10 +1898,6 @@ MPPassManager::runOnModuleMEF(Module &M) {
   llvm::TimeTraceScope TimeScope("OptModule", M.getName());
 
   bool Changed = false;
-    // Debug -- iterable
-    std::cout << "PassVector = =================================";
-    for(auto& var: PassVector) std::cout << (std::string) var->getPassName() << ", "; std::cout << '\n';
-    std::cout << "PassVector = =================================";std::cout << '\n';
 
   // Initialize on-the-fly passes
   for (auto &OnTheFlyManager : OnTheFlyManagers) {

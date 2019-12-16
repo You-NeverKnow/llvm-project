@@ -230,6 +230,9 @@ AnalysisType &Pass::getAnalysisID(AnalysisID PI) const {
   // should be a small number, we just do a linear search over a (dense)
   // vector.
   Pass *ResultPass = Resolver->findImplPass(PI);
+  // debug
+  std::cout << "Analysis pass id " << PI << " returned " << (std::string) ResultPass->getPassName() << '\n';
+
   assert(ResultPass &&
          "getAnalysis*() called on an analysis that was not "
          "'required' by pass!");

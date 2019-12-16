@@ -128,6 +128,7 @@ public:
   void EmitEndOfAsmFile(Module &M) override;
 
   void EmitInstruction(const MachineInstr *MI) override;
+  void EmitInstructionMEF(const MachineInstr *MI) override;
 
   void EmitBasicBlockEnd(const MachineBasicBlock &MBB) override {
     AsmPrinter::EmitBasicBlockEnd(MBB);

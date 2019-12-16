@@ -192,6 +192,10 @@ template <typename DomTreeT>
 void Calculate(DomTreeT &DT);
 
 template <typename DomTreeT>
+void CalculateMEF(DomTreeT &DT);
+
+
+template <typename DomTreeT>
 void CalculateWithUpdates(DomTreeT &DT,
                           ArrayRef<typename DomTreeT::UpdateType> Updates);
 
@@ -244,6 +248,7 @@ protected:
   DomTreeNodeMapType DomTreeNodes;
   DomTreeNodeBase<NodeT> *RootNode;
   ParentPtr Parent = nullptr;
+  MEFBody *ParentMEF = nullptr;
 
   mutable bool DFSInfoValid = false;
   mutable unsigned int SlowQueries = 0;
@@ -731,9 +736,10 @@ public:
     DomTreeBuilder::Calculate(*this);
   }
 
-  /// recalculate - compute a dominator tree for the given function
-  void recalculate(MEFBody &Func) {
-    DomTreeBuilder::Calculate(*this);
+  /// recalculate - compute a dominator forest for the given multi entry function
+  void recalculate(MEFBody &Body) {
+    ParentMEF = &Body;
+    DomTreeBuilder::CalculateMEF(*this);
   }
 
   void recalculate(ParentType &Func, ArrayRef<UpdateType> Updates) {

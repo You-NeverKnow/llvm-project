@@ -45,6 +45,7 @@ public:
 
   /// runOnMachineFunction - pass entry point
   bool runOnMachineFunction(MachineFunction&) override;
+  bool runOnMachineFunctionMEF(MachineFunction&) override;
 
 private:
   bool LowerSubregToReg(MachineInstr *MI);
@@ -179,6 +180,52 @@ bool ExpandPostRA::LowerCopy(MachineInstr *MI) {
 /// copies.
 ///
 bool ExpandPostRA::runOnMachineFunction(MachineFunction &MF) {
+  LLVM_DEBUG(dbgs() << "Machine Function\n"
+                    << "********** EXPANDING POST-RA PSEUDO INSTRS **********\n"
+                    << "********** Function: " << MF.getName() << '\n');
+  TRI = MF.getSubtarget().getRegisterInfo();
+  TII = MF.getSubtarget().getInstrInfo();
+
+  bool MadeChange = false;
+
+  for (MachineFunction::iterator mbbi = MF.begin(), mbbe = MF.end();
+       mbbi != mbbe; ++mbbi) {
+    for (MachineBasicBlock::iterator mi = mbbi->begin(), me = mbbi->end();
+         mi != me;) {
+      MachineInstr &MI = *mi;
+      // Advance iterator here because MI may be erased.
+      ++mi;
+
+      // Only expand pseudos.
+      if (!MI.isPseudo())
+        continue;
+
+      // Give targets a chance to expand even standard pseudos.
+      if (TII->expandPostRAPseudo(MI)) {
+        MadeChange = true;
+        continue;
+      }
+
+      // Expand standard pseudos.
+      switch (MI.getOpcode()) {
+      case TargetOpcode::SUBREG_TO_REG:
+        MadeChange |= LowerSubregToReg(&MI);
+        break;
+      case TargetOpcode::COPY:
+        MadeChange |= LowerCopy(&MI);
+        break;
+      case TargetOpcode::DBG_VALUE:
+        continue;
+      case TargetOpcode::INSERT_SUBREG:
+      case TargetOpcode::EXTRACT_SUBREG:
+        llvm_unreachable("Sub-register pseudos should have been eliminated.");
+      }
+    }
+  }
+
+  return MadeChange;
+}
+bool ExpandPostRA::runOnMachineFunctionMEF(MachineFunction &MF) {
   LLVM_DEBUG(dbgs() << "Machine Function\n"
                     << "********** EXPANDING POST-RA PSEUDO INSTRS **********\n"
                     << "********** Function: " << MF.getName() << '\n');

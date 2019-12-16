@@ -1017,6 +1017,17 @@ void SelectionDAGBuilder::init(GCFunctionInfo *gfi, AliasAnalysis *aa,
   SL->init(DAG.getTargetLoweringInfo(), TM, DAG.getDataLayout());
 }
 
+void SelectionDAGBuilder::initMEF(GCFunctionInfo *gfi, AliasAnalysis *aa,
+                               const TargetLibraryInfo *li) {
+  AA = aa;
+  GFI = gfi;
+  LibInfo = li;
+  DL = &DAG.getDataLayoutMEF();
+  Context = DAG.getContext();
+  LPadToCallSiteMap.clear();
+  SL->init(DAG.getTargetLoweringInfo(), TM, DAG.getDataLayoutMEF());
+}
+
 void SelectionDAGBuilder::clear() {
   NodeMap.clear();
   UnusedArgNodeMap.clear();
@@ -9913,15 +9924,15 @@ void SelectionDAGISel::LowerArguments(const Function &F) {
 void SelectionDAGISel::LowerArguments(const MEFEntry &E) {
   SelectionDAG &DAG = SDB->DAG;
   SDLoc dl = SDB->getCurSDLoc();
-  const DataLayout &DL = DAG.getDataLayout();
+  const DataLayout &DL = DAG.getDataLayoutMEF();
   SmallVector<ISD::InputArg, 16> Ins;
 
   if (!FuncInfo->CanLowerReturn) {
     // Put in an sret pointer parameter before all the other parameters.
     SmallVector<EVT, 1> ValueVTs;
-    ComputeValueVTs(*TLI, DAG.getDataLayout(),
+    ComputeValueVTs(*TLI, DAG.getDataLayoutMEF(),
                     E.getReturnType()->getPointerTo(
-                        DAG.getDataLayout().getAllocaAddrSpace()),
+                        DAG.getDataLayoutMEF().getAllocaAddrSpace()),
                     ValueVTs);
 
     // NOTE: Assuming that a pointer will never break down to more than one VT
@@ -9944,7 +9955,7 @@ void SelectionDAGISel::LowerArguments(const MEFEntry &E) {
   for (const Argument &Arg : E.args()) {
     unsigned ArgNo = Arg.getArgNo();
     SmallVector<EVT, 4> ValueVTs;
-    ComputeValueVTs(*TLI, DAG.getDataLayout(), Arg.getType(), ValueVTs);
+    ComputeValueVTs(*TLI, DAG.getDataLayoutMEF(), Arg.getType(), ValueVTs);
     bool isArgValueUsed = !Arg.use_empty();
     unsigned PartBase = 0;
     Type *FinalType = Arg.getType();
@@ -10083,9 +10094,9 @@ void SelectionDAGISel::LowerArguments(const MEFEntry &E) {
     // Create a virtual register for the sret pointer, and put in a copy
     // from the sret argument into it.
     SmallVector<EVT, 1> ValueVTs;
-    ComputeValueVTs(*TLI, DAG.getDataLayout(),
+    ComputeValueVTs(*TLI, DAG.getDataLayoutMEF(),
                     E.getReturnType()->getPointerTo(
-                        DAG.getDataLayout().getAllocaAddrSpace()),
+                        DAG.getDataLayoutMEF().getAllocaAddrSpace()),
                     ValueVTs);
     MVT VT = ValueVTs[0].getSimpleVT();
     MVT RegVT = TLI->getRegisterType(*CurDAG->getContext(), VT);
@@ -10110,7 +10121,7 @@ void SelectionDAGISel::LowerArguments(const MEFEntry &E) {
   for (const Argument &Arg : E.args()) {
     SmallVector<SDValue, 4> ArgValues;
     SmallVector<EVT, 4> ValueVTs;
-    ComputeValueVTs(*TLI, DAG.getDataLayout(), Arg.getType(), ValueVTs);
+    ComputeValueVTs(*TLI, DAG.getDataLayoutMEF(), Arg.getType(), ValueVTs);
     unsigned NumValues = ValueVTs.size();
     if (NumValues == 0)
       continue;
@@ -10185,7 +10196,7 @@ void SelectionDAGISel::LowerArguments(const MEFEntry &E) {
       // that swapping is that the least significant bits of the argument will
       // be in the first operand of the BUILD_PAIR node, and the most
       // significant bits will be in the second operand.
-      unsigned LowAddressOp = DAG.getDataLayout().isBigEndian() ? 1 : 0;
+      unsigned LowAddressOp = DAG.getDataLayoutMEF().isBigEndian() ? 1 : 0;
       if (LoadSDNode *LNode =
           dyn_cast<LoadSDNode>(Res.getOperand(LowAddressOp).getNode()))
         if (FrameIndexSDNode *FI =

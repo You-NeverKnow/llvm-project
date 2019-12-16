@@ -30,6 +30,7 @@
 
 #include "llvm/ADT/StringRef.h"
 #include <string>
+#include <iostream>
 
 namespace llvm {
 
@@ -294,7 +295,11 @@ public:
   /// runOnFunction - Virtual method overriden by subclasses to do the
   /// per-function processing of the pass.
   virtual bool runOnFunction(Function &F) = 0;
-  virtual bool runOnFunctionMEF(MEFBody &B) {return false;};
+  virtual bool runOnFunctionMEF(MEFBody &B) {
+      // debug
+      std::cout << "MEF pass not implemented for " << (std::string) this->getPassName() << '\n';
+      return false;
+  };
 
   void assignPassManager(PMStack &PMS, PassManagerType T) override;
 

@@ -1151,6 +1151,8 @@ namespace llvm {
     /// or null if the target does not support "fast" ISel.
     FastISel *createFastISel(FunctionLoweringInfo &funcInfo,
                              const TargetLibraryInfo *libInfo) const override;
+    FastISel *createFastISelMEF(FunctionLoweringInfo &funcInfo,
+                             const TargetLibraryInfo *libInfo) const override;
 
     /// If the target has a standard location for the stack protector cookie,
     /// returns the address of that location. Otherwise, returns nullptr.
@@ -1470,6 +1472,8 @@ namespace llvm {
 
   namespace X86 {
     FastISel *createFastISel(FunctionLoweringInfo &funcInfo,
+                             const TargetLibraryInfo *libInfo);
+    FastISel *createFastISelMEF(FunctionLoweringInfo &funcInfo,
                              const TargetLibraryInfo *libInfo);
   } // end namespace X86
 

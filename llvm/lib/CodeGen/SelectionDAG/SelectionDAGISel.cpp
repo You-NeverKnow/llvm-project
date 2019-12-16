@@ -811,7 +811,7 @@ bool SelectionDAGISel::runOnMachineFunctionMEF(MachineFunction &mf) {
 //  else
     AA = nullptr;
 
-  SDB->init(GFI, AA, LibInfo);
+  SDB->initMEF(GFI, AA, LibInfo);
 
   MF->setHasInlineAsm(false);
 
@@ -2225,7 +2225,7 @@ void SelectionDAGISel::SelectAllBasicBlocks(const MEFBody &FnBody) {
   FastISel *FastIS = nullptr;
   if (TM.Options.EnableFastISel) {
     LLVM_DEBUG(dbgs() << "Enabling fast-isel\n");
-    FastIS = TLI->createFastISel(*FuncInfo, LibInfo);
+    FastIS = TLI->createFastISelMEF(*FuncInfo, LibInfo);
   }
 
   ReversePostOrderTraversal<const MEFBody*> RPOT(&FnBody);
@@ -2359,7 +2359,7 @@ void SelectionDAGISel::SelectAllBasicBlocks(const MEFBody &FnBody) {
         FastIS->recomputeInsertPt();
 
         // Try to select the instruction with FastISel.
-        if (FastIS->selectInstruction(Inst)) {
+        if (FastIS->selectInstructionMEF(Inst)) {
           --NumFastIselRemaining;
           ++NumFastIselSuccess;
           // If fast isel succeeded, skip over all the folded instructions, and

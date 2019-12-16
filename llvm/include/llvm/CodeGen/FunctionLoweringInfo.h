@@ -204,8 +204,10 @@ public:
   unsigned CreateReg(MVT VT, bool isDivergent = false);
 
   unsigned CreateRegs(const Value *V);
+  unsigned CreateRegsMEF(const Value *V);
 
   unsigned CreateRegs(Type *Ty, bool isDivergent = false);
+  unsigned CreateRegsMEF(Type *Ty, bool isDivergent = false);
 
   unsigned InitializeRegForValue(const Value *V) {
     // Tokens never live in vregs.
@@ -215,6 +217,15 @@ public:
     assert(R == 0 && "Already initialized this value register!");
     assert(VirtReg2Value.empty());
     return R = CreateRegs(V);
+  }
+  unsigned InitializeRegForValueMEF(const Value *V) {
+    // Tokens never live in vregs.
+    if (V->getType()->isTokenTy())
+      return 0;
+    unsigned &R = ValueMap[V];
+    assert(R == 0 && "Already initialized this value register!");
+    assert(VirtReg2Value.empty());
+    return R = CreateRegsMEF(V);
   }
 
   /// GetLiveOutRegInfo - Gets LiveOutInfo for a register, returning NULL if the

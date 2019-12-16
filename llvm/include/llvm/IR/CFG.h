@@ -348,10 +348,49 @@ template <> struct GraphTraits<Inverse<const BasicBlock*>> {
 //
 template <> struct GraphTraits<MEFBody*> : public GraphTraits<BasicBlock*> {
     static NodeRef getEntryNode(MEFBody *B) { return &B->getPseudoEntryBlock(); }
+
+        // nodes_iterator/begin/end - Allow iteration over all nodes in the graph
+    using nodes_iterator = pointer_iterator<MEFBody::iterator>;
+    static nodes_iterator nodes_begin(MEFBody *B) {
+        return nodes_iterator(B->begin());
+    }
+
+    static nodes_iterator nodes_end(MEFBody *B) {
+        return nodes_iterator(B->end());
+    }
+
+    static size_t size(MEFBody *B) { return B->size(); }
+
 };
-template <> struct GraphTraits<const MEFBody*> : public GraphTraits<const BasicBlock*> {
+template <> struct GraphTraits<const MEFBody*> :
+        public GraphTraits<const BasicBlock*> {
     static NodeRef getEntryNode(const MEFBody *B) { return &B->getPseudoEntryBlock(); }
+
+    using nodes_iterator = pointer_iterator<MEFBody::const_iterator>;
+    static nodes_iterator nodes_begin(const MEFBody *B) {
+        return nodes_iterator(B->begin());
+    }
+
+    static nodes_iterator nodes_end(const MEFBody *B) {
+        return nodes_iterator(B->end());
+    }
+
+    static size_t size(const MEFBody *B) { return B->size(); }
 };
+
+template <> struct GraphTraits<Inverse<MEFBody*>> :
+        public GraphTraits<Inverse<BasicBlock*>> {
+    static NodeRef getEntryNode(Inverse<MEFBody *> G) {
+        return &G.Graph->getPseudoEntryBlock();
+    }
+};
+template <> struct GraphTraits<Inverse<const MEFBody*>> :
+        public GraphTraits<Inverse<const BasicBlock*>> {
+    static NodeRef getEntryNode(Inverse<const MEFBody *> G) {
+        return &G.Graph->getPseudoEntryBlock();
+    }
+};
+
 template <> struct GraphTraits<Function*> : public GraphTraits<BasicBlock*> {
   static NodeRef getEntryNode(Function *F) { return &F->getEntryBlock(); }
 
@@ -403,6 +442,7 @@ template <> struct GraphTraits<Inverse<const Function*>> :
     return &G.Graph->getEntryBlock();
   }
 };
+
 
 } // end namespace llvm
 
